@@ -1,8 +1,9 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 
-export const TMP_DIR = path.join(process.cwd(), 'tmp')
+export const TMP_DIR = path.join(os.tmpdir(), 'svr-jobs')
 
 export function ensureTmpDir() {
   if (!fs.existsSync(TMP_DIR)) {
