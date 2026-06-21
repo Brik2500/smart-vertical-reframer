@@ -54,6 +54,55 @@ async function getCocoSsd() {
   return cocoSsdModel
 }
 
+// Finds the crop window with highest visual activity (text, graphics, high-contrast content).
+// Uses column luminance variance — text creates sharp dark/light alternations that
+// score high even when no ML model recognizes the content.
+async function detectSaliencyCenter(imagePath: string): Promise<FaceBox | null> {
+  const { loadImage, createCanvas } = await import('canvas')
+  const img = await loadImage(imagePath)
+
+  // Work at 25% resolution for speed
+  const scale = 0.25
+  const w = Math.max(1, Math.floor(img.width * scale))
+  const h = Math.max(1, Math.floor(img.height * scale))
+  const canvas = createCanvas(w, h)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(img, 0, 0, w, h)
+
+  const { data } = ctx.getImageData(0, 0, w, h)
+
+  // Variance per column (text = high variance)
+  const colVar = Array.from({ length: w }, (_, x) => {
+    const vals: number[] = []
+    for (let y = 0; y < h; y++) {
+      const i = (y * w + x) * 4
+      vals.push(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+    }
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length
+    return vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length
+  })
+
+  // Sliding window: find the column range whose variance sum is highest
+  const cropW = Math.floor(w * 9 / 16)
+  let bestScore = -1
+  let bestCenterX = img.width / 2
+
+  for (let startX = 0; startX + cropW <= w; startX++) {
+    const score = colVar.slice(startX, startX + cropW).reduce((a, b) => a + b, 0)
+    if (score > bestScore) {
+      bestScore = score
+      bestCenterX = ((startX + cropW / 2) / w) * img.width
+    }
+  }
+
+  console.log(`[DEBUG] saliency fallback → centerX=${Math.round(bestCenterX)}`)
+
+  const cropH = img.height
+  const cropWFull = Math.floor((cropH * 9) / 16)
+  const x = Math.max(0, Math.min(img.width - cropWFull, Math.floor(bestCenterX - cropWFull / 2)))
+  return { x, y: 0, width: cropWFull, height: cropH, centerX: bestCenterX, centerY: img.height / 2, area: cropWFull * cropH }
+}
+
 async function detectSalientObject(imagePath: string): Promise<FaceBox | null> {
   const model = await getCocoSsd()
   const { loadImage, createCanvas } = await import('canvas')
@@ -172,9 +221,12 @@ async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
 
   if (faces.length > 0) return faces
 
-  // No faces — fall back to object detection for B-roll (photos, objects, text subjects)
+  // No faces — fall back to object detection, then saliency for text/graphics
   const obj = await detectSalientObject(imagePath)
-  return obj ? [obj] : []
+  if (obj) return [obj]
+
+  const sal = await detectSaliencyCenter(imagePath)
+  return sal ? [sal] : []
 }
 
 // Sample the video at evenly spaced timestamps, returning faces per timestamp
