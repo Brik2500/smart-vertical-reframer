@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef } from 'react'
 import type { SampledFrame } from '@/lib/jobStore'
 
 interface ReviewStepProps {
@@ -31,6 +31,87 @@ function formatTime(s: number): string {
 
 const DISPLAY_W = 260
 
+// A single draggable crop box overlay on one copy of the frame thumbnail.
+function CropOverlay({
+  jobId,
+  frame,
+  displayH,
+  cropX,
+  displayCropW,
+  borderColor,
+  handleColor,
+  label,
+  labelColor,
+  onChange,
+}: {
+  jobId: string
+  frame: SampledFrame
+  displayH: number
+  cropX: number
+  displayCropW: number
+  borderColor: string
+  handleColor: string
+  label: string
+  labelColor: string
+  onChange: (x: number) => void
+}) {
+  const scale = DISPLAY_W / frame.frameW
+  const maxSourceX = frame.frameW - Math.round(displayCropW / scale)
+  const displayX = Math.max(0, Math.min(DISPLAY_W - displayCropW, cropX * scale))
+
+  const isDragging = useRef(false)
+  const startClientX = useRef(0)
+  const startCropX = useRef(0)
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-lg bg-zinc-900 select-none touch-none"
+      style={{ width: DISPLAY_W, height: displayH }}
+    >
+      <img
+        src={`/api/frames/${jobId}/${frame.filename}`}
+        alt=""
+        width={DISPLAY_W}
+        height={displayH}
+        className="absolute inset-0 object-cover pointer-events-none"
+        draggable={false}
+      />
+
+      {/* Dim left */}
+      <div className="absolute inset-y-0 left-0 bg-black/60 pointer-events-none" style={{ width: displayX }} />
+      {/* Dim right */}
+      <div className="absolute inset-y-0 right-0 bg-black/60 pointer-events-none" style={{ left: displayX + displayCropW }} />
+
+      {/* Draggable box */}
+      <div
+        className={`absolute inset-y-0 border-2 cursor-ew-resize ${borderColor}`}
+        style={{ left: displayX, width: displayCropW }}
+        onPointerDown={e => {
+          e.preventDefault()
+          isDragging.current = true
+          startClientX.current = e.clientX
+          startCropX.current = cropX
+          ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={e => {
+          if (!isDragging.current) return
+          const dx = (e.clientX - startClientX.current) / scale
+          onChange(Math.round(Math.max(0, Math.min(maxSourceX, startCropX.current + dx))))
+        }}
+        onPointerUp={() => { isDragging.current = false }}
+      >
+        <div className={`absolute left-0 inset-y-0 w-1.5 ${handleColor}`} />
+        <div className={`absolute right-0 inset-y-0 w-1.5 ${handleColor}`} />
+      </div>
+
+      {/* Output position label */}
+      <div className={`absolute top-1.5 left-1.5 rounded px-1.5 py-0.5 text-[9px] font-semibold pointer-events-none ${labelColor}`}>
+        {label}
+      </div>
+    </div>
+  )
+}
+
 function FrameCard({
   frame,
   jobId,
@@ -52,60 +133,20 @@ function FrameCard({
 }) {
   const displayH = Math.round(DISPLAY_W * frame.frameH / frame.frameW)
   const scale = DISPLAY_W / frame.frameW
-  // Smart-crop box width (9:16 strip)
+
+  // Smart-crop: 9:16 strip
   const displayCropW = frame.cropW * scale
-  // Split-screen box width: full-height 9:8 strip (matches the render geometry)
+  // Split-screen: 9:8 full-height strip (each half output is 9:8)
   const splitStripW = Math.floor(frame.frameH * 9 / 8)
   const displaySplitW = Math.min(DISPLAY_W, splitStripW * scale)
-  const maxDisplayX = DISPLAY_W - displayCropW
-  const maxSplitX = DISPLAY_W - displaySplitW
-  const halfDisplayH = Math.floor(displayH / 2)
 
-  // Box 1 drag refs
-  const isDragging1 = useRef(false)
-  const drag1StartClientX = useRef(0)
-  const drag1StartCropX = useRef(0)
-
-  // Box 2 drag refs
-  const isDragging2 = useRef(false)
-  const drag2StartClientX = useRef(0)
-  const drag2StartCropX = useRef(0)
-
-  const onPointerDown1 = useCallback((e: React.PointerEvent) => {
-    e.preventDefault()
-    isDragging1.current = true
-    drag1StartClientX.current = e.clientX
-    drag1StartCropX.current = cropX
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-  }, [cropX])
-
-  const onPointerMove1 = useCallback((e: React.PointerEvent) => {
-    if (!isDragging1.current) return
-    const dx = (e.clientX - drag1StartClientX.current) / scale
-    onChange(Math.round(Math.max(0, Math.min(frame.frameW - frame.cropW, drag1StartCropX.current + dx))))
-  }, [scale, frame.frameW, frame.cropW, onChange])
-
-  const onPointerUp1 = useCallback(() => { isDragging1.current = false }, [])
-
-  const onPointerDown2 = useCallback((e: React.PointerEvent) => {
-    e.preventDefault()
-    isDragging2.current = true
-    drag2StartClientX.current = e.clientX
-    drag2StartCropX.current = cropX2
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-  }, [cropX2])
-
-  const onPointerMove2 = useCallback((e: React.PointerEvent) => {
-    if (!isDragging2.current) return
-    const dx = (e.clientX - drag2StartClientX.current) / scale
-    onChange2(Math.round(Math.max(0, Math.min(frame.frameW - frame.cropW, drag2StartCropX.current + dx))))
-  }, [scale, frame.frameW, frame.cropW, onChange2])
-
-  const onPointerUp2 = useCallback(() => { isDragging2.current = false }, [])
-
-  const displayCropX1 = Math.max(0, Math.min(splitScreen ? maxSplitX : maxDisplayX, cropX * scale))
-  const displayCropX2 = Math.max(0, Math.min(maxSplitX, cropX2 * scale))
   const isModified = !splitScreen && Math.abs(cropX - frame.cropX) > 2
+
+  // Shared drag state for single-crop mode
+  const isDragging = useRef(false)
+  const startClientX = useRef(0)
+  const startCropX = useRef(0)
+  const displayX = Math.max(0, Math.min(DISPLAY_W - displayCropW, cropX * scale))
 
   return (
     <div className="space-y-1.5">
@@ -125,102 +166,88 @@ function FrameCard({
         </button>
       </div>
 
-      <div
-        className="relative overflow-hidden rounded-lg bg-zinc-900 select-none touch-none"
-        style={{ width: DISPLAY_W, height: displayH }}
-      >
-        {/* Frame image */}
-        <img
-          src={`/api/frames/${jobId}/${frame.filename}`}
-          alt={`Frame at ${formatTime(frame.time)}`}
-          width={DISPLAY_W}
-          height={displayH}
-          className="absolute inset-0 object-cover pointer-events-none"
-          draggable={false}
-        />
-
-        {splitScreen ? (
-          <>
-            {/* Dividing line */}
-            <div
-              className="absolute left-0 right-0 border-t-2 border-dashed border-violet-400 pointer-events-none z-10"
-              style={{ top: halfDisplayH }}
-            />
-
-            {/* Top dim areas (full height, around top subject box) */}
-            <div className="absolute inset-y-0 left-0 bg-black/60 pointer-events-none" style={{ width: displayCropX1 }} />
-            <div className="absolute inset-y-0 right-0 bg-black/60 pointer-events-none" style={{ left: displayCropX1 + displaySplitW }} />
-
-            {/* Top subject box — full height, indigo */}
-            <div
-              className="absolute inset-y-0 border-2 border-indigo-400 cursor-ew-resize"
-              style={{ left: displayCropX1, width: displaySplitW }}
-              onPointerDown={onPointerDown1}
-              onPointerMove={onPointerMove1}
-              onPointerUp={onPointerUp1}
-            >
-              <div className="absolute left-0 inset-y-0 w-1.5 bg-indigo-400/60" />
-              <div className="absolute right-0 inset-y-0 w-1.5 bg-indigo-400/60" />
-              <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none">
-                <span className="bg-indigo-500/60 rounded px-1 py-0.5 text-[9px] text-indigo-100 font-medium">top</span>
+      {splitScreen ? (
+        // Two separate frame copies — one per subject, no overlap
+        <div className="space-y-1">
+          <CropOverlay
+            jobId={jobId}
+            frame={frame}
+            displayH={displayH}
+            cropX={cropX}
+            displayCropW={displaySplitW}
+            borderColor="border-indigo-400"
+            handleColor="bg-indigo-400/60"
+            label="▲ top output"
+            labelColor="bg-indigo-900/80 text-indigo-200"
+            onChange={onChange}
+          />
+          <div className="flex items-center gap-1.5 px-0.5">
+            <div className="flex-1 border-t border-dashed border-zinc-600" />
+            <span className="text-[9px] text-zinc-500 font-medium">split</span>
+            <div className="flex-1 border-t border-dashed border-zinc-600" />
+          </div>
+          <CropOverlay
+            jobId={jobId}
+            frame={frame}
+            displayH={displayH}
+            cropX={cropX2}
+            displayCropW={displaySplitW}
+            borderColor="border-violet-400"
+            handleColor="bg-violet-400/60"
+            label="▼ bottom output"
+            labelColor="bg-violet-900/80 text-violet-200"
+            onChange={onChange2}
+          />
+        </div>
+      ) : (
+        // Single-crop mode
+        <div
+          className="relative overflow-hidden rounded-lg bg-zinc-900 select-none touch-none"
+          style={{ width: DISPLAY_W, height: displayH }}
+        >
+          <img
+            src={`/api/frames/${jobId}/${frame.filename}`}
+            alt={`Frame at ${formatTime(frame.time)}`}
+            width={DISPLAY_W}
+            height={displayH}
+            className="absolute inset-0 object-cover pointer-events-none"
+            draggable={false}
+          />
+          <div className="absolute inset-y-0 left-0 bg-black/60 pointer-events-none" style={{ width: Math.max(0, displayX) }} />
+          <div className="absolute inset-y-0 right-0 bg-black/60 pointer-events-none" style={{ left: Math.min(DISPLAY_W, displayX + displayCropW) }} />
+          <div
+            className="absolute inset-y-0 border-2 border-indigo-400 cursor-ew-resize"
+            style={{ left: displayX, width: displayCropW }}
+            onPointerDown={e => {
+              e.preventDefault()
+              isDragging.current = true
+              startClientX.current = e.clientX
+              startCropX.current = cropX
+              ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+            }}
+            onPointerMove={e => {
+              if (!isDragging.current) return
+              const dx = (e.clientX - startClientX.current) / scale
+              onChange(Math.round(Math.max(0, Math.min(frame.frameW - frame.cropW, startCropX.current + dx))))
+            }}
+            onPointerUp={() => { isDragging.current = false }}
+          >
+            <div className="absolute left-0 inset-y-0 w-1.5 bg-indigo-400/60" />
+            <div className="absolute right-0 inset-y-0 w-1.5 bg-indigo-400/60" />
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="bg-indigo-500/30 rounded px-1.5 py-0.5">
+                <span className="text-[10px] text-indigo-200 font-medium">drag</span>
               </div>
             </div>
+          </div>
 
-            {/* Dividing line */}
-            <div
-              className="absolute left-0 right-0 border-t-2 border-dashed border-violet-400 pointer-events-none z-10"
-              style={{ top: halfDisplayH }}
-            />
-
-            {/* Bottom subject box — full height, violet (overlaid, bottom label) */}
-            <div
-              className="absolute inset-y-0 border-2 border-violet-400 cursor-ew-resize opacity-80"
-              style={{ left: displayCropX2, width: displaySplitW }}
-              onPointerDown={onPointerDown2}
-              onPointerMove={onPointerMove2}
-              onPointerUp={onPointerUp2}
-            >
-              <div className="absolute left-0 inset-y-0 w-1.5 bg-violet-400/60" />
-              <div className="absolute right-0 inset-y-0 w-1.5 bg-violet-400/60" />
-              <div className="absolute bottom-2 inset-x-0 flex justify-center pointer-events-none">
-                <span className="bg-violet-500/60 rounded px-1 py-0.5 text-[9px] text-violet-100 font-medium">bottom</span>
-              </div>
+          {isModified && (
+            <div className="absolute top-1.5 right-1.5 bg-amber-500 rounded px-1.5 py-0.5 pointer-events-none">
+              <span className="text-[10px] text-black font-semibold">adjusted</span>
             </div>
-
-            {/* Split badge */}
-            <div className="absolute top-1.5 right-1.5 bg-violet-500 rounded px-1.5 py-0.5 pointer-events-none z-20">
-              <span className="text-[10px] text-white font-semibold">split</span>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Single-crop mode — full-height box */}
-            <div className="absolute inset-y-0 left-0 bg-black/60 pointer-events-none" style={{ width: Math.max(0, displayCropX1) }} />
-            <div className="absolute inset-y-0 right-0 bg-black/60 pointer-events-none" style={{ left: Math.min(DISPLAY_W, displayCropX1 + displayCropW) }} />
-            <div
-              className="absolute inset-y-0 border-2 border-indigo-400 cursor-ew-resize"
-              style={{ left: displayCropX1, width: displayCropW }}
-              onPointerDown={onPointerDown1}
-              onPointerMove={onPointerMove1}
-              onPointerUp={onPointerUp1}
-            >
-              <div className="absolute left-0 inset-y-0 w-1.5 bg-indigo-400/60" />
-              <div className="absolute right-0 inset-y-0 w-1.5 bg-indigo-400/60" />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="bg-indigo-500/30 rounded px-1.5 py-0.5">
-                  <span className="text-[10px] text-indigo-200 font-medium">drag</span>
-                </div>
-              </div>
-            </div>
-
-            {isModified && (
-              <div className="absolute top-1.5 right-1.5 bg-amber-500 rounded px-1.5 py-0.5 pointer-events-none">
-                <span className="text-[10px] text-black font-semibold">adjusted</span>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center justify-between px-0.5">
         <span className="text-xs text-zinc-400">{formatTime(frame.time)}</span>
@@ -277,7 +304,7 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
           )}
         </div>
         <p className="text-xs text-zinc-500">
-          Drag the blue box to reposition. Toggle Split Screen to place two crop boxes — one per subject.
+          Drag the blue box to reposition. Toggle Split Screen to set crop positions for each output half independently.
         </p>
       </div>
 
