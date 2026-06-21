@@ -30,14 +30,19 @@ interface Keyframe {
   y: number
 }
 
+export interface ManualKeyframe {
+  t: number
+  x: number  // crop left edge in frame pixels
+}
+
 export function buildDynamicSmartCropFilter(
   timedFaces: TimedFace[],
-  dims: FrameDimensions
+  dims: FrameDimensions,
+  manualKeyframes: ManualKeyframe[] = []
 ): string {
   const { cropW, cropH } = getCropDims(dims)
   const edgeMarginX = Math.floor(cropW * 0.08)
   const maxX = dims.width - cropW
-  const maxY = dims.height - cropH
 
   const keyframes: Keyframe[] = []
 
@@ -47,10 +52,7 @@ export function buildDynamicSmartCropFilter(
 
     const rawX = Math.floor(face.centerX - cropW / 2)
     const x = Math.max(edgeMarginX, Math.min(maxX - edgeMarginX, rawX))
-    const y = 0  // full height crop — Y is always 0, preserving original vertical framing
 
-    // Skip if this keyframe is too close to the previous one with only minor movement
-    // (Rule 5: don't re-compose on every sample — stabilize)
     if (keyframes.length > 0) {
       const prev = keyframes[keyframes.length - 1]
       const dx = Math.abs(x - prev.x)
@@ -58,8 +60,20 @@ export function buildDynamicSmartCropFilter(
       if (dx < minMove) continue
     }
 
-    keyframes.push({ t: tf.time, x, y })
+    keyframes.push({ t: tf.time, x, y: 0 })
   }
+
+  // Merge manual keyframes — director overrides take precedence
+  for (const mk of manualKeyframes) {
+    const clamped = Math.max(0, Math.min(maxX, mk.x))
+    const idx = keyframes.findIndex(k => Math.abs(k.t - mk.t) < 1.0)
+    if (idx >= 0) {
+      keyframes[idx].x = clamped
+    } else {
+      keyframes.push({ t: mk.t, x: clamped, y: 0 })
+    }
+  }
+  keyframes.sort((a, b) => a.t - b.t)
 
   if (keyframes.length === 0) {
     const x = Math.floor((dims.width - cropW) / 2)
@@ -71,8 +85,6 @@ export function buildDynamicSmartCropFilter(
   }
 
   const xExpr = buildMotionExpression(keyframes, 'x', maxX, dims.width)
-
-  // Y is always 0 — full height crop preserves original vertical framing
   return `crop=${cropW}:${cropH}:'${xExpr}':0,scale=540:960:flags=lanczos`
 }
 

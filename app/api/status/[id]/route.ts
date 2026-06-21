@@ -12,5 +12,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   return NextResponse.json({
     status: job.status,
     error: job.error,
+    // sent when detection is complete and job is awaiting review
+    ...(job.status === 'review' && {
+      sampledFrames: job.sampledFrames,
+      frameW: job.dims?.width,
+      frameH: job.dims?.height,
+    }),
   })
 }

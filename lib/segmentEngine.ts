@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { TimedFace, FaceBox, FrameDimensions } from './faceDetection'
-import { buildDynamicSmartCropFilter, buildSmartCropFilter, computeSmartCrop } from './cropEngine'
+import { buildDynamicSmartCropFilter, buildSmartCropFilter, computeSmartCrop, ManualKeyframe } from './cropEngine'
 import { buildSplitScreenFilter, computeSplitScreen } from './splitScreenEngine'
 import { TMP_DIR } from './videoUpload'
 
@@ -114,21 +114,20 @@ export function renderVideoWithSegments(
   segments: VideoSegment[],
   dims: FrameDimensions,
   jobId: string,
-  outputPath: string
+  outputPath: string,
+  manualKeyframes: ManualKeyframe[] = []
 ): void {
   const ffmpeg = ffmpegBin()
 
-  // Single segment — no concatenation needed
   if (segments.length === 1) {
-    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId)
+    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes)
     return
   }
 
-  // Render each segment to a temp file
   const segPaths: string[] = []
   for (let i = 0; i < segments.length; i++) {
     const segOut = path.join(TMP_DIR, `${jobId}_seg${i}.mp4`)
-    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId)
+    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes)
     segPaths.push(segOut)
   }
 
@@ -154,7 +153,8 @@ function renderSegment(
   seg: VideoSegment,
   dims: FrameDimensions,
   outputPath: string,
-  jobId: string
+  jobId: string,
+  manualKeyframes: ManualKeyframe[] = []
 ): void {
   const duration = seg.end - seg.start
   const baseArgs = [
@@ -179,7 +179,7 @@ function renderSegment(
     // Offset timestamps so crop expressions use local time (t=0 at segment start)
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
     const vf = localFaces.length > 1
-      ? buildDynamicSmartCropFilter(localFaces, dims)
+      ? buildDynamicSmartCropFilter(localFaces, dims, manualKeyframes)
       : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
 
     execFileSync(ffmpeg, [

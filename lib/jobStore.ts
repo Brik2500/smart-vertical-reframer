@@ -1,4 +1,16 @@
-export type JobStatus = 'pending' | 'processing' | 'done' | 'error'
+import type { TimedFace, FrameDimensions, DetectionType } from './faceDetection'
+
+export type JobStatus = 'pending' | 'detecting' | 'review' | 'rendering' | 'done' | 'error'
+
+export interface SampledFrame {
+  time: number
+  filename: string       // relative filename inside {jobId}_frames/
+  frameW: number
+  frameH: number
+  cropX: number          // AI-suggested left edge of crop (frame pixels)
+  cropW: number
+  detectionType: DetectionType
+}
 
 export interface Job {
   id: string
@@ -8,9 +20,12 @@ export interface Job {
   error?: string
   mode: string
   createdAt: number
+  // populated after detection
+  sampledFrames?: SampledFrame[]
+  timedFaces?: TimedFace[]
+  dims?: FrameDimensions
 }
 
-// In-memory store — sufficient for V1 single-server use
 const jobs = new Map<string, Job>()
 
 export function createJob(id: string, inputPath: string, mode: string): Job {

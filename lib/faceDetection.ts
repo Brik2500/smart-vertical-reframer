@@ -18,9 +18,12 @@ export interface FrameDimensions {
   height: number
 }
 
+export type DetectionType = 'face' | 'object' | 'saliency' | 'center'
+
 export interface TimedFace {
-  time: number       // seconds into video
+  time: number
   faces: FaceBox[]
+  detectionType: DetectionType
 }
 
 let faceapi: typeof import('@vladmandic/face-api') | null = null
@@ -256,21 +259,21 @@ async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
     }))
 
   if (faces.length > 1) {
-    // Rank by sharpness so rack focus shots follow the in-focus subject
     const scored = faces.map(f => ({ f, s: faceSharpness(imageData, f) }))
     scored.sort((a, b) => b.s - a.s)
     console.log(`[DEBUG] sharpness scores: ${scored.map(x => Math.round(x.s)).join(' | ')} → leading with cx=${Math.round(scored[0].f.centerX)}`)
-    return scored.map(x => x.f)
+    return { faces: scored.map(x => x.f), type: 'face' as DetectionType }
   }
 
-  if (faces.length > 0) return faces
+  if (faces.length > 0) return { faces, type: 'face' as DetectionType }
 
-  // No faces — fall back to object detection, then saliency for text/graphics
   const obj = await detectSalientObject(imagePath)
-  if (obj) return [obj]
+  if (obj) return { faces: [obj], type: 'object' as DetectionType }
 
   const sal = await detectSaliencyCenter(imagePath)
-  return sal ? [sal] : []
+  if (sal) return { faces: [sal], type: 'saliency' as DetectionType }
+
+  return { faces: [], type: 'center' as DetectionType }
 }
 
 // Sample the video at evenly spaced timestamps, returning faces per timestamp
@@ -294,19 +297,19 @@ export async function detectFacesOverTime(
     const framePath = path.join(frameDir, `frame_t${t.toFixed(2).replace('.', '_')}.jpg`)
     try {
       extractFrameAt(videoPath, t, framePath)
-      const faces = await detectFacesInFrame(framePath)
+      const { faces, type } = await detectFacesInFrame(framePath)
       faces.sort((a, b) => b.area - a.area)
-      console.log(`[DEBUG] t=${t}s → ${faces.length} face(s)`, faces.map(f =>
+      console.log(`[DEBUG] t=${t}s → ${faces.length} face(s) [${type}]`, faces.map(f =>
         `cx=${Math.round(f.centerX)} w=${Math.round(f.width)}`
       ).join(' | '))
-      timedFaces.push({ time: t, faces })
+      timedFaces.push({ time: t, faces, detectionType: type })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      // execFileSync throws a SpawnSyncReturns — its stderr is the real FFmpeg error
       const spawnErr = err as { stderr?: Buffer }
       const ffmpegErr = spawnErr?.stderr ? spawnErr.stderr.toString().slice(-300) : ''
       console.log(`[DEBUG] t=${t}s → frame extraction failed: ${msg}`)
       if (ffmpegErr) console.log(`[DEBUG] ffmpeg stderr: ${ffmpegErr}`)
+      timedFaces.push({ time: t, faces: [], detectionType: 'center' })
     }
   }
 
