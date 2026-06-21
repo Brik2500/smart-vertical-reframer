@@ -179,11 +179,45 @@ function extractFrameAt(videoPath: string, timestamp: number, outputPath: string
   ], { stdio: 'pipe' })
 }
 
+// Laplacian variance — measures sharpness of a face crop region.
+// Sharp (in-focus) faces have high edge energy; blurry ones are low.
+// Used to rank faces when multiple are detected (rack focus shots).
+function faceSharpness(
+  imageData: { data: Uint8ClampedArray; width: number; height: number },
+  face: FaceBox
+): number {
+  const { data, width } = imageData
+  const x0 = Math.max(1, Math.floor(face.x))
+  const y0 = Math.max(1, Math.floor(face.y))
+  const x1 = Math.min(width - 2, Math.floor(face.x + face.width))
+  const y1 = Math.min(imageData.height - 2, Math.floor(face.y + face.height))
+
+  let sum = 0
+  let count = 0
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * width + x) * 4
+      const gray = (px: number) => {
+        const j = px * 4
+        return 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2]
+      }
+      // Laplacian kernel: center*4 - top - bottom - left - right
+      const lap = 4 * gray(y * width + x)
+        - gray((y - 1) * width + x)
+        - gray((y + 1) * width + x)
+        - gray(y * width + (x - 1))
+        - gray(y * width + (x + 1))
+      sum += lap * lap
+      count++
+    }
+  }
+  return count > 0 ? sum / count : 0
+}
+
 async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
   await loadModels()
   const api = await getFaceApi()
   const { loadImage, createCanvas } = await import('canvas')
-
 
   const img = await loadImage(imagePath)
   const canvas = createCanvas(img.width, img.height)
@@ -199,6 +233,8 @@ async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
     new api.SsdMobilenetv1Options({ minConfidence: 0.3 })
   )
   const frameWidth = img.width
+
+  const imageData = ctx.getImageData(0, 0, img.width, img.height)
 
   const faces = detections
     .filter(d => {
@@ -218,6 +254,14 @@ async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
       centerY: d.box.y + d.box.height / 2,
       area: d.box.width * d.box.height,
     }))
+
+  if (faces.length > 1) {
+    // Rank by sharpness so rack focus shots follow the in-focus subject
+    const scored = faces.map(f => ({ f, s: faceSharpness(imageData, f) }))
+    scored.sort((a, b) => b.s - a.s)
+    console.log(`[DEBUG] sharpness scores: ${scored.map(x => Math.round(x.s)).join(' | ')} → leading with cx=${Math.round(scored[0].f.centerX)}`)
+    return scored.map(x => x.f)
+  }
 
   if (faces.length > 0) return faces
 
