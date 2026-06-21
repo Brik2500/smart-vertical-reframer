@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow/tfjs": "^4.22.0",
     "@vladmandic/face-api": "^1.7.14",
     "canvas": "^3.1.0",

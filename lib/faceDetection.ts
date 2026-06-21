@@ -25,6 +25,7 @@ export interface TimedFace {
 
 let faceapi: typeof import('@vladmandic/face-api') | null = null
 let modelsLoaded = false
+let cocoSsdModel: import('@tensorflow-models/coco-ssd').ObjectDetection | null = null
 
 async function getFaceApi() {
   if (!faceapi) {
@@ -42,6 +43,45 @@ async function loadModels() {
   const modelPath = path.join(process.cwd(), 'node_modules/@vladmandic/face-api/model')
   await api.nets.ssdMobilenetv1.loadFromDisk(modelPath)
   modelsLoaded = true
+}
+
+async function getCocoSsd() {
+  if (!cocoSsdModel) {
+    await import('@tensorflow/tfjs')
+    const cocoSsd = await import('@tensorflow-models/coco-ssd')
+    cocoSsdModel = await cocoSsd.load()
+  }
+  return cocoSsdModel
+}
+
+async function detectSalientObject(imagePath: string): Promise<FaceBox | null> {
+  const model = await getCocoSsd()
+  const { loadImage, createCanvas } = await import('canvas')
+
+  const img = await loadImage(imagePath)
+  const canvas = createCanvas(img.width, img.height)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(img, 0, 0)
+
+  const predictions = await model.detect(canvas as never)
+  if (predictions.length === 0) return null
+
+  // Filter out tiny detections (< 3% of frame area) then take highest-scoring
+  const frameArea = img.width * img.height
+  const valid = predictions
+    .filter(p => p.bbox[2] * p.bbox[3] >= frameArea * 0.03)
+    .sort((a, b) => b.score - a.score)
+
+  if (valid.length === 0) return null
+
+  const [x, y, width, height] = valid[0].bbox
+  console.log(`[DEBUG] object fallback → ${valid[0].class} (${(valid[0].score * 100).toFixed(0)}%) cx=${Math.round(x + width / 2)}`)
+  return {
+    x, y, width, height,
+    centerX: x + width / 2,
+    centerY: y + height / 2,
+    area: width * height,
+  }
 }
 
 function ffmpegBin(): string {
@@ -95,6 +135,7 @@ async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
   const api = await getFaceApi()
   const { loadImage, createCanvas } = await import('canvas')
 
+
   const img = await loadImage(imagePath)
   const canvas = createCanvas(img.width, img.height)
   const ctx = canvas.getContext('2d')
@@ -110,13 +151,8 @@ async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
   )
   const frameWidth = img.width
 
-  return detections
+  const faces = detections
     .filter(d => {
-      // Reject truly partial faces at the extreme edges.
-      // Minimum width is 3% of frame — low enough to catch wide two-shots
-      // where both faces are small, but high enough to reject pixel noise.
-      // Edge margin rejects faces whose CENTER is within 3% of the frame edge
-      // (these are almost always cut-off partial bodies, not real subjects).
       const minWidth = frameWidth * 0.03
       const edgeMargin = frameWidth * 0.03
       const centerX = d.box.x + d.box.width / 2
@@ -133,6 +169,12 @@ async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
       centerY: d.box.y + d.box.height / 2,
       area: d.box.width * d.box.height,
     }))
+
+  if (faces.length > 0) return faces
+
+  // No faces — fall back to object detection for B-roll (photos, objects, text subjects)
+  const obj = await detectSalientObject(imagePath)
+  return obj ? [obj] : []
 }
 
 // Sample the video at evenly spaced timestamps, returning faces per timestamp
