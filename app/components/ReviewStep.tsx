@@ -52,8 +52,13 @@ function FrameCard({
 }) {
   const displayH = Math.round(DISPLAY_W * frame.frameH / frame.frameW)
   const scale = DISPLAY_W / frame.frameW
+  // Smart-crop box width (9:16 strip)
   const displayCropW = frame.cropW * scale
+  // Split-screen box width: full-height 9:8 strip (matches the render geometry)
+  const splitStripW = Math.floor(frame.frameH * 9 / 8)
+  const displaySplitW = Math.min(DISPLAY_W, splitStripW * scale)
   const maxDisplayX = DISPLAY_W - displayCropW
+  const maxSplitX = DISPLAY_W - displaySplitW
   const halfDisplayH = Math.floor(displayH / 2)
 
   // Box 1 drag refs
@@ -98,8 +103,8 @@ function FrameCard({
 
   const onPointerUp2 = useCallback(() => { isDragging2.current = false }, [])
 
-  const displayCropX1 = Math.max(0, Math.min(maxDisplayX, cropX * scale))
-  const displayCropX2 = Math.max(0, Math.min(maxDisplayX, cropX2 * scale))
+  const displayCropX1 = Math.max(0, Math.min(splitScreen ? maxSplitX : maxDisplayX, cropX * scale))
+  const displayCropX2 = Math.max(0, Math.min(maxSplitX, cropX2 * scale))
   const isModified = !splitScreen && Math.abs(cropX - frame.cropX) > 2
 
   return (
@@ -142,41 +147,43 @@ function FrameCard({
               style={{ top: halfDisplayH }}
             />
 
-            {/* Top-half dim areas */}
-            <div className="absolute left-0 bg-black/60 pointer-events-none" style={{ top: 0, width: displayCropX1, height: halfDisplayH }} />
-            <div className="absolute right-0 bg-black/60 pointer-events-none" style={{ top: 0, left: displayCropX1 + displayCropW, height: halfDisplayH }} />
+            {/* Top dim areas (full height, around top subject box) */}
+            <div className="absolute inset-y-0 left-0 bg-black/60 pointer-events-none" style={{ width: displayCropX1 }} />
+            <div className="absolute inset-y-0 right-0 bg-black/60 pointer-events-none" style={{ left: displayCropX1 + displaySplitW }} />
 
-            {/* Top draggable box */}
+            {/* Top subject box — full height, indigo */}
             <div
-              className="absolute border-2 border-indigo-400 cursor-ew-resize"
-              style={{ top: 0, height: halfDisplayH, left: displayCropX1, width: displayCropW }}
+              className="absolute inset-y-0 border-2 border-indigo-400 cursor-ew-resize"
+              style={{ left: displayCropX1, width: displaySplitW }}
               onPointerDown={onPointerDown1}
               onPointerMove={onPointerMove1}
               onPointerUp={onPointerUp1}
             >
               <div className="absolute left-0 inset-y-0 w-1.5 bg-indigo-400/60" />
               <div className="absolute right-0 inset-y-0 w-1.5 bg-indigo-400/60" />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <span className="bg-indigo-500/40 rounded px-1 py-0.5 text-[9px] text-indigo-200 font-medium">top</span>
+              <div className="absolute top-2 inset-x-0 flex justify-center pointer-events-none">
+                <span className="bg-indigo-500/60 rounded px-1 py-0.5 text-[9px] text-indigo-100 font-medium">top</span>
               </div>
             </div>
 
-            {/* Bottom-half dim areas */}
-            <div className="absolute left-0 bg-black/60 pointer-events-none" style={{ top: halfDisplayH, width: displayCropX2, bottom: 0 }} />
-            <div className="absolute right-0 bg-black/60 pointer-events-none" style={{ top: halfDisplayH, left: displayCropX2 + displayCropW, bottom: 0 }} />
-
-            {/* Bottom draggable box */}
+            {/* Dividing line */}
             <div
-              className="absolute border-2 border-violet-400 cursor-ew-resize"
-              style={{ top: halfDisplayH, bottom: 0, left: displayCropX2, width: displayCropW }}
+              className="absolute left-0 right-0 border-t-2 border-dashed border-violet-400 pointer-events-none z-10"
+              style={{ top: halfDisplayH }}
+            />
+
+            {/* Bottom subject box — full height, violet (overlaid, bottom label) */}
+            <div
+              className="absolute inset-y-0 border-2 border-violet-400 cursor-ew-resize opacity-80"
+              style={{ left: displayCropX2, width: displaySplitW }}
               onPointerDown={onPointerDown2}
               onPointerMove={onPointerMove2}
               onPointerUp={onPointerUp2}
             >
               <div className="absolute left-0 inset-y-0 w-1.5 bg-violet-400/60" />
               <div className="absolute right-0 inset-y-0 w-1.5 bg-violet-400/60" />
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <span className="bg-violet-500/40 rounded px-1 py-0.5 text-[9px] text-violet-200 font-medium">bottom</span>
+              <div className="absolute bottom-2 inset-x-0 flex justify-center pointer-events-none">
+                <span className="bg-violet-500/60 rounded px-1 py-0.5 text-[9px] text-violet-100 font-medium">bottom</span>
               </div>
             </div>
 

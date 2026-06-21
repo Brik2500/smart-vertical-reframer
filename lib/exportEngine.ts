@@ -75,13 +75,15 @@ export async function renderVideo(
 }
 
 // Build SplitScreenParams from two manually positioned crop X values.
+// Both crops span the FULL source height so each subject is shown head-to-toe,
+// not cut at the midpoint of the frame. Each vertical strip is 9:8 wide
+// (matching the 1080x960 output half) and independently positioned.
 function manualSplitParams(ov: SplitOverride, dims: FrameDimensions): SplitScreenParams {
-  const halfH = dims.height / 2
-  const stripW = Math.floor((halfH * 9) / 16)
+  const stripW = Math.floor(dims.height * 9 / 8)  // 9:8 strip from full source height
   const clamp = (x: number) => Math.max(0, Math.min(dims.width - stripW, x))
   return {
-    top:    { x: clamp(ov.cropX),  y: 0,             width: stripW, height: Math.floor(halfH) },
-    bottom: { x: clamp(ov.cropX2), y: Math.floor(halfH), width: stripW, height: dims.height - Math.floor(halfH) },
+    top:    { x: clamp(ov.cropX),  y: 0, width: stripW, height: dims.height },
+    bottom: { x: clamp(ov.cropX2), y: 0, width: stripW, height: dims.height },
   }
 }
 
@@ -107,9 +109,13 @@ function applyManualSplitScreens(
     const si = sampleTimes.reduce((best, t, i) =>
       Math.abs(t - ov.time) < Math.abs(sampleTimes[best] - ov.time) ? i : best, 0)
 
-    // Boundaries at midpoints to neighboring samples, clamped to the segment
-    const splitStart = Math.max(seg.start, si > 0 ? (sampleTimes[si - 1] + sampleTimes[si]) / 2 : seg.start)
-    const splitEnd   = Math.min(seg.end,   si < sampleTimes.length - 1 ? (sampleTimes[si] + sampleTimes[si + 1]) / 2 : seg.end)
+    // Boundaries at midpoints to neighboring samples, capped at ±2.5s so the
+    // split-screen window stays tight even when samples are far apart.
+    const MAX_RADIUS = 2.5
+    const prevMid = si > 0 ? (sampleTimes[si - 1] + sampleTimes[si]) / 2 : seg.start
+    const nextMid = si < sampleTimes.length - 1 ? (sampleTimes[si] + sampleTimes[si + 1]) / 2 : seg.end
+    const splitStart = Math.max(seg.start, Math.max(prevMid, ov.time - MAX_RADIUS))
+    const splitEnd   = Math.min(seg.end,   Math.min(nextMid, ov.time + MAX_RADIUS))
 
     const replacements: VideoSegment[] = []
 
