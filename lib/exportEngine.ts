@@ -1,7 +1,8 @@
 import path from 'path'
 import { TMP_DIR } from './videoUpload'
 import { detectFacesOverTime, decideSplitScreen, getVideoDuration, TimedFace, FrameDimensions } from './faceDetection'
-import { classifySegments, renderVideoWithSegments } from './segmentEngine'
+import { classifySegments, renderVideoWithSegments, VideoSegment } from './segmentEngine'
+import { SplitScreenParams } from './splitScreenEngine'
 import { computeSmartCrop } from './cropEngine'
 import type { SampledFrame } from './jobStore'
 import type { ManualKeyframe } from './cropEngine'
@@ -33,6 +34,12 @@ export async function detectVideo(
   return { timedFaces, dims, sampledFrames }
 }
 
+export interface SplitOverride {
+  time: number
+  cropX: number   // top-half X position
+  cropX2: number  // bottom-half X position
+}
+
 export async function renderVideo(
   jobId: string,
   inputPath: string,
@@ -40,7 +47,7 @@ export async function renderVideo(
   dims: FrameDimensions,
   timedFaces: TimedFace[],
   manualKeyframes: ManualKeyframe[] = [],
-  splitScreenTimes: number[] = []
+  splitOverrides: SplitOverride[] = []
 ): Promise<string> {
   const outputPath = path.join(TMP_DIR, `${jobId}_output.mp4`)
   const duration = getVideoDuration(inputPath)
@@ -56,29 +63,42 @@ export async function renderVideo(
 
   if (mode === 'smart-crop') {
     const segments = [{ start: 0, end: duration, type: 'smart-crop' as const, timedFaces }]
-    applyManualSplitScreens(segments, splitScreenTimes, timedFaces)
+    applyManualSplitScreens(segments, splitOverrides, dims)
     renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
     return outputPath
   }
 
   const segments = classifySegments(timedFaces, dims, duration)
-  applyManualSplitScreens(segments, splitScreenTimes, timedFaces)
+  applyManualSplitScreens(segments, splitOverrides, dims)
   renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
   return outputPath
 }
 
-// For each manually marked split-screen timestamp, find the containing segment
-// and upgrade it to split-screen using the detected face positions.
+// Build SplitScreenParams from two manually positioned crop X values.
+function manualSplitParams(ov: SplitOverride, dims: FrameDimensions): SplitScreenParams {
+  const halfH = dims.height / 2
+  const stripW = Math.floor((halfH * 9) / 16)
+  const clamp = (x: number) => Math.max(0, Math.min(dims.width - stripW, x))
+  return {
+    top:    { x: clamp(ov.cropX),  y: 0,             width: stripW, height: Math.floor(halfH) },
+    bottom: { x: clamp(ov.cropX2), y: Math.floor(halfH), width: stripW, height: dims.height - Math.floor(halfH) },
+  }
+}
+
+// For each manual split-screen override, find the containing segment and
+// upgrade it to split-screen using the user-positioned crop boxes.
 function applyManualSplitScreens(
-  segments: import('./segmentEngine').VideoSegment[],
-  times: number[],
-  timedFaces: TimedFace[]
+  segments: VideoSegment[],
+  overrides: SplitOverride[],
+  dims: FrameDimensions
 ): void {
-  for (const t of times) {
-    const tf = timedFaces.find(f => Math.abs(f.time - t) < 1.5)
-    if (!tf || tf.faces.length < 2) continue
-    const idx = segments.findIndex(s => s.start <= t && t < s.end)
+  for (const ov of overrides) {
+    const idx = segments.findIndex(s => s.start <= ov.time && ov.time < s.end)
     if (idx === -1) continue
-    segments[idx] = { ...segments[idx], type: 'split-screen', splitFaces: [tf.faces[0], tf.faces[1]] }
+    segments[idx] = {
+      ...segments[idx],
+      type: 'split-screen',
+      manualSplitParams: manualSplitParams(ov, dims),
+    }
   }
 }

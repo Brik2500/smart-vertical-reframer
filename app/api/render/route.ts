@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getJob, updateJob } from '@/lib/jobStore'
-import { renderVideo, ReframingMode } from '@/lib/exportEngine'
+import { renderVideo, ReframingMode, SplitOverride } from '@/lib/exportEngine'
 import { saveCorrections } from '@/lib/correctionsStore'
 import type { SampledFrame } from '@/lib/jobStore'
 
 interface Override {
   time: number
   cropX: number
+  cropX2?: number
   splitScreen?: boolean
 }
 
@@ -42,9 +43,11 @@ export async function POST(req: NextRequest) {
 
     updateJob(jobId, { status: 'rendering' })
 
-    const manualKeyframes = overrides.map(o => ({ t: o.time, x: o.cropX }))
-    const splitScreenTimes = overrides.filter(o => o.splitScreen).map(o => o.time)
-    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, manualKeyframes, splitScreenTimes)
+    const manualKeyframes = overrides.filter(o => !o.splitScreen).map(o => ({ t: o.time, x: o.cropX }))
+    const splitOverrides: SplitOverride[] = overrides
+      .filter(o => o.splitScreen)
+      .map(o => ({ time: o.time, cropX: o.cropX, cropX2: o.cropX2 ?? o.cropX }))
+    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, manualKeyframes, splitOverrides)
       .then(outputPath => updateJob(jobId, { status: 'done', outputPath }))
       .catch(err => {
         console.error('[render]', err)

@@ -3,7 +3,7 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import { TimedFace, FaceBox, FrameDimensions } from './faceDetection'
 import { buildDynamicSmartCropFilter, buildSmartCropFilter, computeSmartCrop, ManualKeyframe } from './cropEngine'
-import { buildSplitScreenFilter, computeSplitScreen } from './splitScreenEngine'
+import { buildSplitScreenFilter, computeSplitScreen, SplitScreenParams } from './splitScreenEngine'
 import { TMP_DIR } from './videoUpload'
 
 export interface VideoSegment {
@@ -12,6 +12,7 @@ export interface VideoSegment {
   type: 'smart-crop' | 'split-screen'
   timedFaces: TimedFace[]     // samples that fall in this segment (global timestamps)
   splitFaces?: [FaceBox, FaceBox]
+  manualSplitParams?: SplitScreenParams  // set when user manually positioned both boxes
 }
 
 function ffmpegBin(): string {
@@ -163,20 +164,21 @@ function renderSegment(
     '-t', String(duration),
   ]
 
-  if (seg.type === 'split-screen' && seg.splitFaces) {
-    const params = computeSplitScreen(seg.splitFaces[0], seg.splitFaces[1], dims)
-    const filterComplex = buildSplitScreenFilter(params)
+  const splitParams = seg.type === 'split-screen'
+    ? (seg.manualSplitParams ?? (seg.splitFaces ? computeSplitScreen(seg.splitFaces[0], seg.splitFaces[1], dims) : null))
+    : null
+
+  if (splitParams) {
     execFileSync(ffmpeg, [
       '-loglevel', 'error',
       ...baseArgs,
-      '-filter_complex', filterComplex,
+      '-filter_complex', buildSplitScreenFilter(splitParams),
       '-map', '[out]',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
       '-c:a', 'aac',
       outputPath, '-y',
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
   } else {
-    // Offset timestamps so crop expressions use local time (t=0 at segment start)
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
     const vf = localFaces.length > 1
       ? buildDynamicSmartCropFilter(localFaces, dims, manualKeyframes)
