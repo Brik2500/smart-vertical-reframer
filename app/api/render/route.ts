@@ -43,11 +43,30 @@ export async function POST(req: NextRequest) {
 
     updateJob(jobId, { status: 'rendering' })
 
-    const manualKeyframes = overrides.filter(o => !o.splitScreen).map(o => ({ t: o.time, x: o.cropX }))
+    // Anchor propagation: frames the director didn't touch inherit the cropX
+    // of the nearest manually-adjusted frame, replacing bad AI guesses in between.
+    const cropOverrides = overrides.filter(o => !o.splitScreen)
+    const adjusted = cropOverrides.filter(o => {
+      const orig = job.sampledFrames?.find(f => Math.abs(f.time - o.time) < 0.5)
+      return orig && Math.abs(o.cropX - orig.cropX) > 2
+    })
+
+    const anchoredKeyframes = cropOverrides.map(o => {
+      // If this frame was manually adjusted, use it as-is.
+      if (adjusted.some(a => Math.abs(a.time - o.time) < 0.5)) return { t: o.time, x: o.cropX }
+      // If no adjustments were made at all, keep the AI suggestion.
+      if (adjusted.length === 0) return { t: o.time, x: o.cropX }
+      // Otherwise, inherit from the nearest adjusted frame.
+      const nearest = adjusted.reduce((best, a) =>
+        Math.abs(a.time - o.time) < Math.abs(best.time - o.time) ? a : best
+      )
+      return { t: o.time, x: nearest.cropX }
+    })
+
     const splitOverrides: SplitOverride[] = overrides
       .filter(o => o.splitScreen)
       .map(o => ({ time: o.time, cropX: o.cropX, cropX2: o.cropX2 ?? o.cropX }))
-    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, manualKeyframes, splitOverrides)
+    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides)
       .then(outputPath => updateJob(jobId, { status: 'done', outputPath }))
       .catch(err => {
         console.error('[render]', err)
