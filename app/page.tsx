@@ -108,7 +108,7 @@ export default function Home() {
     }
   }
 
-  const handleRender = async (overrides: { time: number; cropX: number }[]) => {
+  const handleRender = async (overrides: { time: number; cropX: number; splitScreen?: boolean }[]) => {
     if (!jobId) return
     setStage('rendering')
 

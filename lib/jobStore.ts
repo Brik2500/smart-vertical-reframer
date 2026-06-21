@@ -10,6 +10,7 @@ export interface SampledFrame {
   cropX: number          // AI-suggested left edge of crop (frame pixels)
   cropW: number
   detectionType: DetectionType
+  faceCount: number      // how many faces detected in this frame
 }
 
 export interface Job {

@@ -7,6 +7,7 @@ import type { SampledFrame } from '@/lib/jobStore'
 interface Override {
   time: number
   cropX: number
+  splitScreen?: boolean
 }
 
 export async function POST(req: NextRequest) {
@@ -41,7 +42,9 @@ export async function POST(req: NextRequest) {
 
     updateJob(jobId, { status: 'rendering' })
 
-    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, overrides.map(o => ({ t: o.time, x: o.cropX })))
+    const manualKeyframes = overrides.map(o => ({ t: o.time, x: o.cropX }))
+    const splitScreenTimes = overrides.filter(o => o.splitScreen).map(o => o.time)
+    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, manualKeyframes, splitScreenTimes)
       .then(outputPath => updateJob(jobId, { status: 'done', outputPath }))
       .catch(err => {
         console.error('[render]', err)

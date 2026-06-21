@@ -6,7 +6,7 @@ import type { SampledFrame } from '@/lib/jobStore'
 interface ReviewStepProps {
   jobId: string
   frames: SampledFrame[]
-  onRender: (overrides: { time: number; cropX: number }[]) => void
+  onRender: (overrides: { time: number; cropX: number; splitScreen?: boolean }[]) => void
 }
 
 const DETECTION_LABELS: Record<string, string> = {
@@ -35,12 +35,16 @@ function FrameCard({
   frame,
   jobId,
   cropX,
+  splitScreen,
   onChange,
+  onToggleSplit,
 }: {
   frame: SampledFrame
   jobId: string
   cropX: number
+  splitScreen: boolean
   onChange: (x: number) => void
+  onToggleSplit: () => void
 }) {
   const displayH = Math.round(DISPLAY_W * frame.frameH / frame.frameW)
   const scale = DISPLAY_W / frame.frameW
@@ -72,9 +76,27 @@ function FrameCard({
   }, [])
 
   const isModified = Math.abs(cropX - frame.cropX) > 2
+  const canSplit = frame.faceCount >= 2
 
   return (
     <div className="space-y-1.5">
+      {/* Split screen toggle — only shown when 2+ faces detected */}
+      {canSplit && (
+        <div className="flex rounded-md overflow-hidden border border-zinc-700 text-[10px] font-semibold">
+          <button
+            onClick={() => { if (splitScreen) onToggleSplit() }}
+            className={`flex-1 py-1 transition-colors ${!splitScreen ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+          >
+            Crop
+          </button>
+          <button
+            onClick={() => { if (!splitScreen) onToggleSplit() }}
+            className={`flex-1 py-1 transition-colors ${splitScreen ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+          >
+            Split Screen
+          </button>
+        </div>
+      )}
       <div
         className="relative overflow-hidden rounded-lg bg-zinc-900 select-none touch-none"
         style={{ width: DISPLAY_W, height: displayH }}
@@ -120,10 +142,27 @@ function FrameCard({
           </div>
         </div>
 
+        {/* Split screen overlay — dims crop box and shows stacked indicator */}
+        {splitScreen && (
+          <div className="absolute inset-0 flex flex-col pointer-events-none">
+            <div className="flex-1 border-b-2 border-violet-400 flex items-center justify-center bg-violet-900/20">
+              <span className="text-[10px] text-violet-300 font-semibold">top subject</span>
+            </div>
+            <div className="flex-1 flex items-center justify-center bg-violet-900/20">
+              <span className="text-[10px] text-violet-300 font-semibold">bottom subject</span>
+            </div>
+          </div>
+        )}
+
         {/* Modified badge */}
-        {isModified && (
+        {isModified && !splitScreen && (
           <div className="absolute top-1.5 right-1.5 bg-amber-500 rounded px-1.5 py-0.5 pointer-events-none">
             <span className="text-[10px] text-black font-semibold">adjusted</span>
+          </div>
+        )}
+        {splitScreen && (
+          <div className="absolute top-1.5 right-1.5 bg-violet-500 rounded px-1.5 py-0.5 pointer-events-none">
+            <span className="text-[10px] text-white font-semibold">split</span>
           </div>
         )}
       </div>
@@ -142,16 +181,23 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
   const [cropPositions, setCropPositions] = useState<Record<number, number>>(
     Object.fromEntries(frames.map(f => [f.time, f.cropX]))
   )
+  const [splitModes, setSplitModes] = useState<Record<number, boolean>>({})
 
   const adjustedCount = frames.filter(f => Math.abs(cropPositions[f.time] - f.cropX) > 2).length
+  const splitCount = Object.values(splitModes).filter(Boolean).length
 
   const handleRender = () => {
-    const overrides = frames.map(f => ({ time: f.time, cropX: cropPositions[f.time] }))
+    const overrides = frames.map(f => ({
+      time: f.time,
+      cropX: cropPositions[f.time],
+      splitScreen: splitModes[f.time] ?? false,
+    }))
     onRender(overrides)
   }
 
   const handleReset = () => {
     setCropPositions(Object.fromEntries(frames.map(f => [f.time, f.cropX])))
+    setSplitModes({})
   }
 
   return (
@@ -180,15 +226,20 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
             frame={f}
             jobId={jobId}
             cropX={cropPositions[f.time]}
+            splitScreen={splitModes[f.time] ?? false}
             onChange={x => setCropPositions(prev => ({ ...prev, [f.time]: x }))}
+            onToggleSplit={() => setSplitModes(prev => ({ ...prev, [f.time]: !prev[f.time] }))}
           />
         ))}
       </div>
 
       <div className="space-y-2">
-        {adjustedCount > 0 && (
+        {(adjustedCount > 0 || splitCount > 0) && (
           <p className="text-xs text-amber-400 text-center">
-            {adjustedCount} frame{adjustedCount > 1 ? 's' : ''} adjusted — correction{adjustedCount > 1 ? 's' : ''} will be saved
+            {[
+              adjustedCount > 0 && `${adjustedCount} crop${adjustedCount > 1 ? 's' : ''} adjusted`,
+              splitCount > 0 && `${splitCount} frame${splitCount > 1 ? 's' : ''} set to split screen`,
+            ].filter(Boolean).join(' · ')}
           </p>
         )}
         <button
