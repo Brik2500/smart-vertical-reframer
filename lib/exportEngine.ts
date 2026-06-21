@@ -63,13 +63,13 @@ export async function renderVideo(
 
   if (mode === 'smart-crop') {
     const segments = [{ start: 0, end: duration, type: 'smart-crop' as const, timedFaces }]
-    applyManualSplitScreens(segments, splitOverrides, dims)
+    applyManualSplitScreens(segments, splitOverrides, dims, timedFaces)
     renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
     return outputPath
   }
 
   const segments = classifySegments(timedFaces, dims, duration)
-  applyManualSplitScreens(segments, splitOverrides, dims)
+  applyManualSplitScreens(segments, splitOverrides, dims, timedFaces)
   renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
   return outputPath
 }
@@ -85,20 +85,58 @@ function manualSplitParams(ov: SplitOverride, dims: FrameDimensions): SplitScree
   }
 }
 
-// For each manual split-screen override, find the containing segment and
-// upgrade it to split-screen using the user-positioned crop boxes.
+// Split the containing segment around each manually marked split-screen frame.
+// Uses midpoints to adjacent sampled frames as boundaries (same logic as classifySegments),
+// so only the window around the marked frame becomes split-screen.
 function applyManualSplitScreens(
   segments: VideoSegment[],
   overrides: SplitOverride[],
-  dims: FrameDimensions
+  dims: FrameDimensions,
+  timedFaces: TimedFace[]
 ): void {
+  const sampleTimes = timedFaces.map(tf => tf.time).sort((a, b) => a - b)
+
   for (const ov of overrides) {
-    const idx = segments.findIndex(s => s.start <= ov.time && ov.time < s.end)
-    if (idx === -1) continue
-    segments[idx] = {
-      ...segments[idx],
-      type: 'split-screen',
-      manualSplitParams: manualSplitParams(ov, dims),
+    const segIdx = segments.findIndex(s => s.start <= ov.time && ov.time < s.end)
+    if (segIdx === -1) continue
+
+    const seg = segments[segIdx]
+    const params = manualSplitParams(ov, dims)
+
+    // Find the sampled frame closest to this override time
+    const si = sampleTimes.reduce((best, t, i) =>
+      Math.abs(t - ov.time) < Math.abs(sampleTimes[best] - ov.time) ? i : best, 0)
+
+    // Boundaries at midpoints to neighboring samples, clamped to the segment
+    const splitStart = Math.max(seg.start, si > 0 ? (sampleTimes[si - 1] + sampleTimes[si]) / 2 : seg.start)
+    const splitEnd   = Math.min(seg.end,   si < sampleTimes.length - 1 ? (sampleTimes[si] + sampleTimes[si + 1]) / 2 : seg.end)
+
+    const replacements: VideoSegment[] = []
+
+    if (splitStart > seg.start) {
+      replacements.push({
+        ...seg,
+        end: splitStart,
+        timedFaces: seg.timedFaces.filter(tf => tf.time < splitStart),
+      })
     }
+
+    replacements.push({
+      start: splitStart,
+      end: splitEnd,
+      type: 'split-screen',
+      timedFaces: seg.timedFaces.filter(tf => tf.time >= splitStart && tf.time < splitEnd),
+      manualSplitParams: params,
+    })
+
+    if (splitEnd < seg.end) {
+      replacements.push({
+        ...seg,
+        start: splitEnd,
+        timedFaces: seg.timedFaces.filter(tf => tf.time >= splitEnd),
+      })
+    }
+
+    segments.splice(segIdx, 1, ...replacements)
   }
 }
