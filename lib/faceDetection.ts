@@ -217,7 +217,7 @@ function faceSharpness(
   return count > 0 ? sum / count : 0
 }
 
-async function detectFacesInFrame(imagePath: string): Promise<FaceBox[]> {
+async function detectFacesInFrame(imagePath: string): Promise<{ faces: FaceBox[]; type: DetectionType }> {
   await loadModels()
   const api = await getFaceApi()
   const { loadImage, createCanvas } = await import('canvas')
