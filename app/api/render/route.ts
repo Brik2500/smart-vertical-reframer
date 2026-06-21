@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     const splitOverrides: SplitOverride[] = overrides
       .filter(o => o.splitScreen)
       .map(o => ({ time: o.time, cropX: o.cropX, cropX2: o.cropX2 ?? o.cropX }))
-    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides)
+    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides, job.sceneCuts ?? [])
       .then(outputPath => updateJob(jobId, { status: 'done', outputPath }))
       .catch(err => {
         console.error('[render]', err)

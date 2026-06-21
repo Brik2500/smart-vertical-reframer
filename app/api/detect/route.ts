@@ -13,8 +13,8 @@ export async function POST(req: NextRequest) {
     updateJob(jobId, { status: 'detecting' })
 
     detectVideo(jobId, job.inputPath)
-      .then(({ timedFaces, dims, sampledFrames }) => {
-        updateJob(jobId, { status: 'review', timedFaces, dims, sampledFrames })
+      .then(({ timedFaces, dims, sampledFrames, sceneCuts }) => {
+        updateJob(jobId, { status: 'review', timedFaces, dims, sampledFrames, sceneCuts })
       })
       .catch(err => {
         console.error('[detect]', err)

@@ -4,6 +4,7 @@ import { detectFacesOverTime, decideSplitScreen, getVideoDuration, TimedFace, Fr
 import { classifySegments, renderVideoWithSegments, VideoSegment } from './segmentEngine'
 import { SplitScreenParams } from './splitScreenEngine'
 import { computeSmartCrop } from './cropEngine'
+import { detectSceneCuts } from './sceneDetection'
 import type { SampledFrame } from './jobStore'
 import type { ManualKeyframe } from './cropEngine'
 
@@ -12,8 +13,11 @@ export type ReframingMode = 'smart-crop' | 'split-screen' | 'auto'
 export async function detectVideo(
   jobId: string,
   inputPath: string
-): Promise<{ timedFaces: TimedFace[]; dims: FrameDimensions; sampledFrames: SampledFrame[] }> {
+): Promise<{ timedFaces: TimedFace[]; dims: FrameDimensions; sampledFrames: SampledFrame[]; sceneCuts: number[] }> {
   const { timedFaces, dims } = await detectFacesOverTime(inputPath, jobId, 12)
+  const sceneCuts = detectSceneCuts(inputPath)
+
+  console.log(`[detect] found ${sceneCuts.length} scene cuts:`, sceneCuts.map(t => t.toFixed(2)).join(', '))
 
   const sampledFrames: SampledFrame[] = timedFaces.map(tf => {
     const face = tf.faces[0] ?? null
@@ -31,7 +35,7 @@ export async function detectVideo(
     }
   })
 
-  return { timedFaces, dims, sampledFrames }
+  return { timedFaces, dims, sampledFrames, sceneCuts }
 }
 
 export interface SplitOverride {
@@ -47,7 +51,8 @@ export async function renderVideo(
   dims: FrameDimensions,
   timedFaces: TimedFace[],
   manualKeyframes: ManualKeyframe[] = [],
-  splitOverrides: SplitOverride[] = []
+  splitOverrides: SplitOverride[] = [],
+  sceneCuts: number[] = []
 ): Promise<string> {
   const outputPath = path.join(TMP_DIR, `${jobId}_output.mp4`)
   const duration = getVideoDuration(inputPath)
@@ -63,13 +68,13 @@ export async function renderVideo(
 
   if (mode === 'smart-crop') {
     const segments = [{ start: 0, end: duration, type: 'smart-crop' as const, timedFaces }]
-    applyManualSplitScreens(segments, splitOverrides, dims, timedFaces)
+    applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
     renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
     return outputPath
   }
 
   const segments = classifySegments(timedFaces, dims, duration)
-  applyManualSplitScreens(segments, splitOverrides, dims, timedFaces)
+  applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
   renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
   return outputPath
 }
@@ -94,7 +99,8 @@ function applyManualSplitScreens(
   segments: VideoSegment[],
   overrides: SplitOverride[],
   dims: FrameDimensions,
-  timedFaces: TimedFace[]
+  timedFaces: TimedFace[],
+  sceneCuts: number[] = []
 ): void {
   const sampleTimes = timedFaces.map(tf => tf.time).sort((a, b) => a - b)
 
@@ -105,17 +111,25 @@ function applyManualSplitScreens(
     const seg = segments[segIdx]
     const params = manualSplitParams(ov, dims)
 
-    // Find the sampled frame closest to this override time
-    const si = sampleTimes.reduce((best, t, i) =>
-      Math.abs(t - ov.time) < Math.abs(sampleTimes[best] - ov.time) ? i : best, 0)
+    let splitStart: number
+    let splitEnd: number
 
-    // Boundaries at midpoints to neighboring samples, capped at ±2.5s so the
-    // split-screen window stays tight even when samples are far apart.
-    const MAX_RADIUS = 2.5
-    const prevMid = si > 0 ? (sampleTimes[si - 1] + sampleTimes[si]) / 2 : seg.start
-    const nextMid = si < sampleTimes.length - 1 ? (sampleTimes[si] + sampleTimes[si + 1]) / 2 : seg.end
-    const splitStart = Math.max(seg.start, Math.max(prevMid, ov.time - MAX_RADIUS))
-    const splitEnd   = Math.min(seg.end,   Math.min(nextMid, ov.time + MAX_RADIUS))
+    if (sceneCuts.length > 0) {
+      // Snap boundaries to the scene cuts immediately before and after the marked frame.
+      const cutBefore = [...sceneCuts].reverse().find(t => t < ov.time) ?? seg.start
+      const cutAfter  = sceneCuts.find(t => t > ov.time) ?? seg.end
+      splitStart = Math.max(seg.start, cutBefore)
+      splitEnd   = Math.min(seg.end,   cutAfter)
+    } else {
+      // Fallback: midpoints to adjacent sampled frames, capped at ±2.5s
+      const si = sampleTimes.reduce((best, t, i) =>
+        Math.abs(t - ov.time) < Math.abs(sampleTimes[best] - ov.time) ? i : best, 0)
+      const MAX_RADIUS = 2.5
+      const prevMid = si > 0 ? (sampleTimes[si - 1] + sampleTimes[si]) / 2 : seg.start
+      const nextMid = si < sampleTimes.length - 1 ? (sampleTimes[si] + sampleTimes[si + 1]) / 2 : seg.end
+      splitStart = Math.max(seg.start, Math.max(prevMid, ov.time - MAX_RADIUS))
+      splitEnd   = Math.min(seg.end,   Math.min(nextMid, ov.time + MAX_RADIUS))
+    }
 
     const replacements: VideoSegment[] = []
 

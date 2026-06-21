@@ -25,6 +25,7 @@ export interface Job {
   sampledFrames?: SampledFrame[]
   timedFaces?: TimedFace[]
   dims?: FrameDimensions
+  sceneCuts?: number[]
 }
 
 const jobs = new Map<string, Job>()
