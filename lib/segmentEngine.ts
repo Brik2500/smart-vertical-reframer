@@ -174,6 +174,7 @@ function renderSegment(
       ...baseArgs,
       '-filter_complex', buildSplitScreenFilter(splitParams),
       '-map', '[out]',
+      '-map', '0:a?',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
       '-c:a', 'aac',
       outputPath, '-y',
