@@ -137,14 +137,15 @@ export function renderVideoWithSegments(
   fs.writeFileSync(playlistPath, segPaths.map(p => `file '${p}'`).join('\n'))
 
   execFileSync(ffmpeg, [
+    '-loglevel', 'error',
     '-f', 'concat',
     '-safe', '0',
     '-i', playlistPath,
-    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
     '-c:a', 'aac',
     '-movflags', '+faststart',
     outputPath, '-y',
-  ], { stdio: 'pipe' })
+  ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
 }
 
 function renderSegment(
@@ -166,13 +167,14 @@ function renderSegment(
     const params = computeSplitScreen(seg.splitFaces[0], seg.splitFaces[1], dims)
     const filterComplex = buildSplitScreenFilter(params)
     execFileSync(ffmpeg, [
+      '-loglevel', 'error',
       ...baseArgs,
       '-filter_complex', filterComplex,
       '-map', '[out]',
-      '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
       '-c:a', 'aac',
       outputPath, '-y',
-    ], { stdio: 'pipe' })
+    ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
   } else {
     // Offset timestamps so crop expressions use local time (t=0 at segment start)
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
@@ -181,11 +183,12 @@ function renderSegment(
       : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
 
     execFileSync(ffmpeg, [
+      '-loglevel', 'error',
       ...baseArgs,
       '-vf', vf,
-      '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
       '-c:a', 'aac',
       outputPath, '-y',
-    ], { stdio: 'pipe' })
+    ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
   }
 }

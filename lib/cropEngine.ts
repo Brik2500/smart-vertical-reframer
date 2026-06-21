@@ -63,17 +63,17 @@ export function buildDynamicSmartCropFilter(
 
   if (keyframes.length === 0) {
     const x = Math.floor((dims.width - cropW) / 2)
-    return `crop=${cropW}:${cropH}:${x}:0,scale=1080:1920:flags=lanczos`
+    return `crop=${cropW}:${cropH}:${x}:0,scale=540:960:flags=lanczos`
   }
 
   if (keyframes.length === 1) {
-    return `crop=${cropW}:${cropH}:${keyframes[0].x}:${keyframes[0].y},scale=1080:1920:flags=lanczos`
+    return `crop=${cropW}:${cropH}:${keyframes[0].x}:${keyframes[0].y},scale=540:960:flags=lanczos`
   }
 
   const xExpr = buildMotionExpression(keyframes, 'x', maxX, dims.width)
 
   // Y is always 0 — full height crop preserves original vertical framing
-  return `crop=${cropW}:${cropH}:'${xExpr}':0,scale=1080:1920:flags=lanczos`
+  return `crop=${cropW}:${cropH}:'${xExpr}':0,scale=540:960:flags=lanczos`
 }
 
 // Determines whether to snap (cut) or ease (pan) between keyframes.
@@ -140,5 +140,5 @@ function clampY(y: number, cropH: number, frameH: number): number {
 }
 
 export function buildSmartCropFilter(crop: CropParams): string {
-  return `crop=${crop.width}:${crop.height}:${crop.x}:${crop.y},scale=1080:1920:flags=lanczos`
+  return `crop=${crop.width}:${crop.height}:${crop.x}:${crop.y},scale=540:960:flags=lanczos`
 }

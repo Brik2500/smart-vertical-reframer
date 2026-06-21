@@ -49,8 +49,8 @@ export function buildSplitScreenFilter(params: SplitScreenParams): string {
   const { top, bottom } = params
   // Crop each half, scale each to 1080x960, then vstack
   return (
-    `[0:v]crop=${top.width}:${top.height}:${top.x}:${top.y},scale=1080:960:flags=lanczos[top];` +
-    `[0:v]crop=${bottom.width}:${bottom.height}:${bottom.x}:${bottom.y},scale=1080:960:flags=lanczos[bottom];` +
+    `[0:v]crop=${top.width}:${top.height}:${top.x}:${top.y},scale=540:480:flags=lanczos[top];` +
+    `[0:v]crop=${bottom.width}:${bottom.height}:${bottom.x}:${bottom.y},scale=540:480:flags=lanczos[bottom];` +
     `[top][bottom]vstack=inputs=2[out]`
   )
 }
