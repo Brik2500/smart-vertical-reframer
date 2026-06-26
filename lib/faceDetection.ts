@@ -217,7 +217,17 @@ function faceSharpness(
   return count > 0 ? sum / count : 0
 }
 
-async function detectFacesInFrame(imagePath: string): Promise<{ faces: FaceBox[]; type: DetectionType }> {
+interface RawDetection {
+  score: number
+  box: { x: number; y: number; width: number; height: number }
+  centerX: number
+  centerY: number
+  area: number
+  filteredOut: boolean
+  filterReason?: string
+}
+
+async function detectFacesInFrame(imagePath: string): Promise<{ faces: FaceBox[]; type: DetectionType; rawDetections: RawDetection[] }> {
   await loadModels()
   const api = await getFaceApi()
   const { loadImage, createCanvas } = await import('canvas')
@@ -236,17 +246,33 @@ async function detectFacesInFrame(imagePath: string): Promise<{ faces: FaceBox[]
     new api.SsdMobilenetv1Options({ minConfidence: 0.3 })
   )
   const frameWidth = img.width
+  const minWidth = frameWidth * 0.03
+  const edgeMargin = frameWidth * 0.03
 
   const imageData = ctx.getImageData(0, 0, img.width, img.height)
 
+  const rawDetections: RawDetection[] = detections.map(d => {
+    const cx = d.box.x + d.box.width / 2
+    let filteredOut = false
+    let filterReason: string | undefined
+    if (d.box.width < minWidth) { filteredOut = true; filterReason = 'too_small' }
+    else if (cx <= edgeMargin) { filteredOut = true; filterReason = 'too_far_left' }
+    else if (cx >= frameWidth - edgeMargin) { filteredOut = true; filterReason = 'too_far_right' }
+    return {
+      score: d.score,
+      box: { x: d.box.x, y: d.box.y, width: d.box.width, height: d.box.height },
+      centerX: cx,
+      centerY: d.box.y + d.box.height / 2,
+      area: d.box.width * d.box.height,
+      filteredOut,
+      filterReason,
+    }
+  })
+
   const faces = detections
     .filter(d => {
-      const minWidth = frameWidth * 0.03
-      const edgeMargin = frameWidth * 0.03
-      const centerX = d.box.x + d.box.width / 2
-      return d.box.width >= minWidth &&
-        centerX > edgeMargin &&
-        centerX < frameWidth - edgeMargin
+      const cx = d.box.x + d.box.width / 2
+      return d.box.width >= minWidth && cx > edgeMargin && cx < frameWidth - edgeMargin
     })
     .map(d => ({
       x: d.box.x,
@@ -262,18 +288,18 @@ async function detectFacesInFrame(imagePath: string): Promise<{ faces: FaceBox[]
     const scored = faces.map(f => ({ f, s: faceSharpness(imageData, f) }))
     scored.sort((a, b) => b.s - a.s)
     console.log(`[DEBUG] sharpness scores: ${scored.map(x => Math.round(x.s)).join(' | ')} → leading with cx=${Math.round(scored[0].f.centerX)}`)
-    return { faces: scored.map(x => x.f), type: 'face' as DetectionType }
+    return { faces: scored.map(x => x.f), type: 'face' as DetectionType, rawDetections }
   }
 
-  if (faces.length > 0) return { faces, type: 'face' as DetectionType }
+  if (faces.length > 0) return { faces, type: 'face' as DetectionType, rawDetections }
 
   const obj = await detectSalientObject(imagePath)
-  if (obj) return { faces: [obj], type: 'object' as DetectionType }
+  if (obj) return { faces: [obj], type: 'object' as DetectionType, rawDetections }
 
   const sal = await detectSaliencyCenter(imagePath)
-  if (sal) return { faces: [sal], type: 'saliency' as DetectionType }
+  if (sal) return { faces: [sal], type: 'saliency' as DetectionType, rawDetections }
 
-  return { faces: [], type: 'center' as DetectionType }
+  return { faces: [], type: 'center' as DetectionType, rawDetections }
 }
 
 // Sample the video at evenly spaced timestamps, returning faces per timestamp
@@ -292,16 +318,18 @@ export async function detectFacesOverTime(
   const timestamps = Array.from({ length: sampleCount }, (_, i) => parseFloat(((i + 1) * step).toFixed(2)))
 
   const timedFaces: TimedFace[] = []
+  const detectionLog: Array<{ t: number; type: DetectionType; raw: RawDetection[] }> = []
 
   for (const t of timestamps) {
     const framePath = path.join(frameDir, `frame_t${t.toFixed(2).replace('.', '_')}.jpg`)
     try {
       extractFrameAt(videoPath, t, framePath)
-      const { faces, type } = await detectFacesInFrame(framePath)
+      const { faces, type, rawDetections } = await detectFacesInFrame(framePath)
       faces.sort((a, b) => b.area - a.area)
       console.log(`[DEBUG] t=${t}s → ${faces.length} face(s) [${type}]`, faces.map(f =>
         `cx=${Math.round(f.centerX)} w=${Math.round(f.width)}`
       ).join(' | '))
+      detectionLog.push({ t, type, raw: rawDetections })
       timedFaces.push({ time: t, faces, detectionType: type })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -309,9 +337,17 @@ export async function detectFacesOverTime(
       const ffmpegErr = spawnErr?.stderr ? spawnErr.stderr.toString().slice(-300) : ''
       console.log(`[DEBUG] t=${t}s → frame extraction failed: ${msg}`)
       if (ffmpegErr) console.log(`[DEBUG] ffmpeg stderr: ${ffmpegErr}`)
+      detectionLog.push({ t, type: 'center', raw: [] })
       timedFaces.push({ time: t, faces: [], detectionType: 'center' })
     }
   }
+
+  // Write raw detection log for post-hoc diagnosis of glitch frames.
+  // Download via /api/detections?jobId=<id> to inspect confidence scores
+  // and bounding boxes before/after filtering.
+  const logPath = path.join(TMP_DIR, `${jobId}_detections.json`)
+  fs.writeFileSync(logPath, JSON.stringify(detectionLog, null, 2))
+  console.log(`[detect] raw detection log → ${logPath}`)
 
   return { timedFaces, dims }
 }
