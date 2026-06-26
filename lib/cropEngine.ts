@@ -98,11 +98,15 @@ export function buildDynamicSmartCropFilter(
     return `crop=${cropW}:${cropH}:${rawKeyframes[0].x}:0,scale=540:960:flags=lanczos`
   }
 
+  console.log(`[crop] rawKF (${rawKeyframes.length}): ${rawKeyframes.map(k => `t=${k.t.toFixed(1)}x${k.x}`).join(' | ')}`)
+
   const segments = buildStabilizedSegments({
     rawKeyframes,
     cropWidth: cropW,
     sceneCutAt,
   })
+
+  console.log(`[crop] segments (${segments.length}): ${segments.map(s => `${s.fromT.toFixed(1)}-${s.toT.toFixed(1)}(${s.type}):${s.fromX}→${s.toX}`).join(' | ')}`)
 
   if (segments.length === 0) {
     return `crop=${cropW}:${cropH}:${frameCenterX}:0,scale=540:960:flags=lanczos`

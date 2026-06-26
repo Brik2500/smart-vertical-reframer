@@ -110,8 +110,15 @@ export function filterOutlierKeyframes(
       const deviation = Math.abs(kf.x - expectedX) / cropWidth;
 
       if (deviation > maxJumpFraction && !sceneCutAt(kf.t)) {
-        // Big jump with no corroborating scene cut -> misdetection, skip it.
-        continue;
+        // Only drop if the keyframe deviates significantly from BOTH raw neighbors.
+        // Deviation from just prev = start of a new sustained position (real move).
+        // Deviation from just next = end of a sustained position (real move).
+        // An isolated spike deviates from both — that's the only case to reject.
+        const deviationFromPrev = Math.abs(kf.x - prev.x) / cropWidth;
+        const deviationFromNext = Math.abs(kf.x - next.x) / cropWidth;
+        if (deviationFromPrev > maxJumpFraction && deviationFromNext > maxJumpFraction) {
+          continue; // isolated spike — drop it
+        }
       }
     }
 
