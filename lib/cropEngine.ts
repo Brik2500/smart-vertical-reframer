@@ -48,6 +48,11 @@ export function buildDynamicSmartCropFilter(
   const keyframes: Keyframe[] = []
 
   for (const tf of timedFaces) {
+    // 'center' is a pure no-detection fallback — it has no subject information
+    // and would pull the crop toward the middle for stretches with no face/object.
+    // Skipping it lets the expression hold the last known-good position instead.
+    if (tf.detectionType === 'center') continue
+
     const face = tf.faces[0] ?? null
     if (!face) continue
 
@@ -76,15 +81,22 @@ export function buildDynamicSmartCropFilter(
   }
   keyframes.sort((a, b) => a.t - b.t)
 
-  // Outlier rejection: drop keyframes that deviate sharply from both neighbors
-  // unless there's a scene cut near that timestamp (which would legitimize the jump).
+  // Outlier rejection using linear interpolation:
+  // Compare each keyframe's x against where it *should* be if the neighbors
+  // represent a continuous smooth move (time-weighted, not a simple average).
+  // A big deviation is only accepted if a scene cut independently corroborates it.
   const OUTLIER_THRESHOLD = dims.width * 0.25
   const cleaned = keyframes.filter((k, i) => {
     if (i === 0 || i === keyframes.length - 1) return true
     const nearCut = sceneCuts.some(c => Math.abs(c - k.t) < 1.5)
     if (nearCut) return true
-    const neighborAvg = (keyframes[i - 1].x + keyframes[i + 1].x) / 2
-    return Math.abs(k.x - neighborAvg) <= OUTLIER_THRESHOLD
+    const prev = keyframes[i - 1]
+    const next = keyframes[i + 1]
+    const dtTotal = next.t - prev.t
+    const expectedX = dtTotal > 0
+      ? prev.x + (next.x - prev.x) * ((k.t - prev.t) / dtTotal)
+      : (prev.x + next.x) / 2
+    return Math.abs(k.x - expectedX) <= OUTLIER_THRESHOLD
   })
 
   if (cleaned.length === 0) {
