@@ -51,15 +51,22 @@ export async function POST(req: NextRequest) {
       return orig && Math.abs(o.cropX - orig.cropX) > 2
     })
 
+    const sceneCuts = job.sceneCuts ?? []
+
     const anchoredKeyframes = cropOverrides.map(o => {
       // If this frame was manually adjusted, use it as-is.
       if (adjusted.some(a => Math.abs(a.time - o.time) < 0.5)) return { t: o.time, x: o.cropX }
       // If no adjustments were made at all, keep the AI suggestion.
       if (adjusted.length === 0) return { t: o.time, x: o.cropX }
-      // Otherwise, inherit from the nearest adjusted frame.
+      // Find the nearest adjusted frame.
       const nearest = adjusted.reduce((best, a) =>
         Math.abs(a.time - o.time) < Math.abs(best.time - o.time) ? a : best
       )
+      // Don't propagate across a scene cut — that's a different shot.
+      const lo = Math.min(o.time, nearest.time)
+      const hi = Math.max(o.time, nearest.time)
+      const cutBetween = sceneCuts.some(cut => cut > lo && cut < hi)
+      if (cutBetween) return { t: o.time, x: o.cropX }
       return { t: o.time, x: nearest.cropX }
     })
 
