@@ -134,24 +134,31 @@ export function filterOutlierKeyframes(
 // cut only if the independent scene-cut signal says so -- never inferred
 // from keyframe spacing alone.
 
+// sceneCuts must be the raw detected cut timestamps (seconds).
+// A segment is a 'cut' if any cut timestamp falls strictly inside
+// (fromT, toT] — range check, not proximity to a single boundary.
+// The old sceneCutAt(b.t) point-check was off-by-one: it matched cuts
+// near the segment END, missing cuts in the middle and false-flagging
+// cuts just beyond the end.
 export function classifySegments(
   keyframes: Keyframe[],
-  sceneCutAt: (t: number) => boolean
+  sceneCuts: number[]
 ): ClassifiedSegment[] {
+  const sorted = [...sceneCuts].sort((a, b) => a - b);
   const segments: ClassifiedSegment[] = [];
 
   for (let i = 0; i < keyframes.length - 1; i++) {
     const a = keyframes[i];
     const b = keyframes[i + 1];
 
-    const cut = sceneCutAt(b.t);
+    const hasCut = sorted.some(c => c > a.t && c <= b.t);
 
     segments.push({
       fromT: a.t,
       toT: b.t,
       fromX: a.x,
       toX: b.x,
-      type: cut ? 'cut' : 'pan',
+      type: hasCut ? 'cut' : 'pan',
     });
   }
 
@@ -202,7 +209,8 @@ function lerp(a: number, b: number, t: number): number {
 export interface BuildStabilizedKeyframesOptions {
   rawKeyframes: Keyframe[];
   cropWidth: number;
-  sceneCutAt: (t: number) => boolean;
+  sceneCutAt: (t: number) => boolean;  // point-check for outlier rejection
+  sceneCuts?: number[];                 // raw timestamps for range-based classification
   maxJumpFraction?: number;
   minConfidence?: number;
 }
@@ -214,6 +222,7 @@ export function buildStabilizedSegments(
     rawKeyframes,
     cropWidth,
     sceneCutAt,
+    sceneCuts = [],
     maxJumpFraction = 0.25,
     minConfidence = 0.5,
   } = options;
@@ -225,7 +234,7 @@ export function buildStabilizedSegments(
     sceneCutAt,
   });
 
-  return classifySegments(cleaned, sceneCutAt);
+  return classifySegments(cleaned, sceneCuts);
 }
 
 // ---------- FFmpeg expression builder ----------

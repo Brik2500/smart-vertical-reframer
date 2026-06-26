@@ -107,6 +107,7 @@ export function buildDynamicSmartCropFilter(
     rawKeyframes,
     cropWidth: cropW,
     sceneCutAt,
+    sceneCuts,
   })
 
   console.log(`[crop] segments (${segments.length}): ${segments.map(s => `${s.fromT.toFixed(1)}-${s.toT.toFixed(1)}(${s.type}):${s.fromX}→${s.toX}`).join(' | ')}`)
