@@ -32,7 +32,8 @@ let cocoSsdModel: import('@tensorflow-models/coco-ssd').ObjectDetection | null =
 
 async function getFaceApi() {
   if (!faceapi) {
-    await import('@tensorflow/tfjs')
+    // @ts-ignore — tfjs-node is a Railway dep with native binaries; not installed locally
+    await import('@tensorflow/tfjs-node')
     faceapi = await import('@vladmandic/face-api')
     const { Canvas, Image, ImageData } = await import('canvas')
     faceapi.env.monkeyPatch({ Canvas, Image, ImageData } as never)
@@ -50,7 +51,8 @@ async function loadModels() {
 
 async function getCocoSsd() {
   if (!cocoSsdModel) {
-    await import('@tensorflow/tfjs')
+    // @ts-ignore — tfjs-node is a Railway dep with native binaries; not installed locally
+    await import('@tensorflow/tfjs-node')
     const cocoSsd = await import('@tensorflow-models/coco-ssd')
     cocoSsdModel = await cocoSsd.load()
   }
