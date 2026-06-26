@@ -20,9 +20,13 @@ export async function detectVideo(
   const sceneCuts = detectSceneCuts(inputPath)
   console.log(`[detect] found ${sceneCuts.length} scene cuts:`, sceneCuts.map(t => t.toFixed(2)).join(', '))
 
-  // Place two samples bracketing each cut: just before and just after.
-  const CUT_BRACKET = 0.4  // seconds away from the cut point
-  const cutAdjacent = sceneCuts.flatMap(c => [c - CUT_BRACKET, c + CUT_BRACKET])
+  // Asymmetric brackets around each cut:
+  // Pre-cut is tight (0.2s) — capture the final clean frame of the outgoing shot.
+  // Post-cut is relaxed (0.75s) — give the incoming shot a beat to settle before
+  // sampling, so we don't lock onto a half-turned head or blink right at the cut.
+  const PRE_CUT = 0.2
+  const POST_CUT = 0.75
+  const cutAdjacent = sceneCuts.flatMap(c => [c - PRE_CUT, c + POST_CUT])
 
   const { timedFaces, dims } = await detectFacesOverTime(inputPath, jobId, 30, cutAdjacent)
 

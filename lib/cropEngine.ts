@@ -71,6 +71,9 @@ export function buildDynamicSmartCropFilter(
 
     if (rawKeyframes.length > 0) {
       const prev = rawKeyframes[rawKeyframes.length - 1]
+      // Drop if timestamp is within 0.15s of previous (bracket landed on a base sample)
+      if (Math.abs(tf.time - prev.t) < 0.15) continue
+      // Drop if x hasn't moved by at least 5% of crop width (micro-jitter)
       if (Math.abs(x - prev.x) < cropW * 0.05) continue
     }
 
