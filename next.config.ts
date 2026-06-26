@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
   },
   serverExternalPackages: [
     '@tensorflow/tfjs',
+    '@tensorflow/tfjs-node',
     '@tensorflow-models/coco-ssd',
     '@vladmandic/face-api',
     'canvas',
