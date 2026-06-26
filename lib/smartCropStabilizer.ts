@@ -78,14 +78,15 @@ export interface OutlierRejectionOptions {
   cropWidth: number;
   maxJumpFraction?: number;   // default 0.25 (25% of crop width)
   minConfidence?: number;     // default 0.5
-  sceneCutAt: (t: number) => boolean; // independent cut signal lookup
+  sceneCutAt: (t: number) => boolean; // proximity check, kept for legacy callers
+  sceneCuts?: number[];       // raw cut timestamps for range-based outlier check
 }
 
 export function filterOutlierKeyframes(
   keyframes: Keyframe[],
   opts: OutlierRejectionOptions
 ): Keyframe[] {
-  const { cropWidth, maxJumpFraction = 0.25, minConfidence = 0.5, sceneCutAt } = opts;
+  const { cropWidth, maxJumpFraction = 0.25, minConfidence = 0.5, sceneCutAt, sceneCuts = [] } = opts;
 
   const sorted = [...keyframes].sort((a, b) => a.t - b.t);
   const cleaned: Keyframe[] = [];
@@ -110,7 +111,15 @@ export function filterOutlierKeyframes(
 
       const deviation = Math.abs(kf.x - expectedX) / cropWidth;
 
-      if (deviation > maxJumpFraction && !sceneCutAt(kf.t)) {
+      // A position jump is justified if a scene cut falls anywhere between
+      // the previous kept keyframe and this one (range check, not proximity).
+      // The old sceneCutAt(kf.t) point-check used a ±0.5s epsilon that missed
+      // post-cut bracket samples landing 0.6–0.75s after the cut.
+      const cutJustifiesJump = prev
+        ? sceneCuts.some(c => c > prev.t && c <= kf.t)
+        : false;
+
+      if (deviation > maxJumpFraction && !cutJustifiesJump) {
         // Only drop if the keyframe deviates significantly from BOTH raw neighbors.
         // Deviation from just prev = start of a new sustained position (real move).
         // Deviation from just next = end of a sustained position (real move).
@@ -234,6 +243,7 @@ export function buildStabilizedSegments(
     maxJumpFraction,
     minConfidence,
     sceneCutAt,
+    sceneCuts,
   });
 
   return classifySegments(cleaned, sceneCuts);
