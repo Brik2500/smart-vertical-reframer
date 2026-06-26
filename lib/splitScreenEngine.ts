@@ -86,13 +86,25 @@ export function buildDynamicSplitScreenFilter(
   // Sort by time — bracket samples arrive out of order relative to base grid.
   const sorted = [...timedFaces].sort((a, b) => a.time - b.time)
 
+  const sampleLog: string[] = []
+
   for (const tf of sorted) {
     const detections = tf.faces.map(f => ({ cx: f.centerX, width: f.width }))
     const resolved = resolveSplitScreenPanes({ t: tf.time, detections, previousPanes: prevPanes })
-    topKF.push(    { t: tf.time, x: toX(resolved.top.cx) })
-    bottomKF.push( { t: tf.time, x: toX(resolved.bottom.cx) })
+
+    const topX    = toX(resolved.top.cx)
+    const bottomX = toX(resolved.bottom.cx)
+    topKF.push(    { t: tf.time, x: topX })
+    bottomKF.push( { t: tf.time, x: bottomX })
+
+    const topStatus    = resolved.top.lastUpdatedAt    === tf.time ? `${topX}`         : `HOLD(${topX})`
+    const bottomStatus = resolved.bottom.lastUpdatedAt === tf.time ? `${bottomX}`      : `HOLD(${bottomX})`
+    sampleLog.push(`t=${tf.time.toFixed(2)} det=${detections.length} top=${topStatus} bot=${bottomStatus}`)
+
     prevPanes = resolved
   }
+
+  console.log(`[split] samples (${sorted.length}): ${sampleLog.join(' | ')}`)
 
   const topX    = buildHoldExpr(topKF,    initialParams.top.x)
   const bottomX = buildHoldExpr(bottomKF, initialParams.bottom.x)
