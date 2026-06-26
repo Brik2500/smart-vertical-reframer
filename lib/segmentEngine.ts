@@ -122,14 +122,18 @@ export function renderVideoWithSegments(
   const ffmpeg = ffmpegBin()
 
   if (segments.length === 1) {
+    console.log(`[render] single segment — starting FFmpeg render`)
     renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes, sceneCuts)
+    console.log(`[render] FFmpeg render complete`)
     return
   }
 
   const segPaths: string[] = []
   for (let i = 0; i < segments.length; i++) {
     const segOut = path.join(TMP_DIR, `${jobId}_seg${i}.mp4`)
+    console.log(`[render] segment ${i + 1}/${segments.length} (${segments[i].type}) ${segments[i].start.toFixed(1)}s→${segments[i].end.toFixed(1)}s`)
     renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts)
+    console.log(`[render] segment ${i + 1}/${segments.length} done`)
     segPaths.push(segOut)
   }
 
@@ -137,6 +141,7 @@ export function renderVideoWithSegments(
   const playlistPath = path.join(TMP_DIR, `${jobId}_playlist.txt`)
   fs.writeFileSync(playlistPath, segPaths.map(p => `file '${p}'`).join('\n'))
 
+  console.log(`[render] concat ${segments.length} segments → final output`)
   execFileSync(ffmpeg, [
     '-loglevel', 'error',
     '-f', 'concat',
@@ -147,6 +152,7 @@ export function renderVideoWithSegments(
     '-movflags', '+faststart',
     outputPath, '-y',
   ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
+  console.log(`[render] concat done — output ready`)
 }
 
 function renderSegment(
