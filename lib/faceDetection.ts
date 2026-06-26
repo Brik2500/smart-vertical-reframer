@@ -239,58 +239,70 @@ async function detectFacesInFrame(imagePath: string): Promise<{ faces: FaceBox[]
   const ctx = canvas.getContext('2d')
   ctx.drawImage(img, 0, 0)
 
-  // Lower confidence threshold (default 0.5) to catch faces that are:
-  // - small in wide/two-shots
-  // - at a 3/4 angle (looking across the room at another person)
-  // The edge/size filters below still reject noise at this lower threshold.
-  const detections = await api.detectAllFaces(
-    canvas as never,
-    new api.SsdMobilenetv1Options({ minConfidence: 0.3 })
-  )
   const frameWidth = img.width
   const minWidth = frameWidth * 0.03
   const edgeMargin = frameWidth * 0.03
-
   const imageData = ctx.getImageData(0, 0, img.width, img.height)
 
-  const rawDetections: RawDetection[] = detections.map(d => {
-    const cx = d.box.x + d.box.width / 2
-    let filteredOut = false
-    let filterReason: string | undefined
-    if (d.box.width < minWidth) { filteredOut = true; filterReason = 'too_small' }
-    else if (cx <= edgeMargin) { filteredOut = true; filterReason = 'too_far_left' }
-    else if (cx >= frameWidth - edgeMargin) { filteredOut = true; filterReason = 'too_far_right' }
-    return {
-      score: d.score,
-      box: { x: d.box.x, y: d.box.y, width: d.box.width, height: d.box.height },
-      centerX: cx,
-      centerY: d.box.y + d.box.height / 2,
-      area: d.box.width * d.box.height,
-      filteredOut,
-      filterReason,
-    }
-  })
+  // @ts-ignore — tfjs-node loaded as side-effect; startScope/endScope frees
+  // intermediate tensors produced by detectAllFaces after each frame so they
+  // don't accumulate across 30 frames and exhaust Railway's memory limit.
+  const tf = await import('@tensorflow/tfjs-node')
+  tf.engine().startScope()
 
-  const faces = detections
-    .filter(d => {
+  let rawDetections: RawDetection[] = []
+  let faces: FaceBox[] = []
+
+  try {
+    // Lower confidence threshold (default 0.5) to catch faces that are:
+    // - small in wide/two-shots
+    // - at a 3/4 angle (looking across the room at another person)
+    const detections = await api.detectAllFaces(
+      canvas as never,
+      new api.SsdMobilenetv1Options({ minConfidence: 0.3 })
+    )
+
+    rawDetections = detections.map(d => {
       const cx = d.box.x + d.box.width / 2
-      return d.box.width >= minWidth && cx > edgeMargin && cx < frameWidth - edgeMargin
+      let filteredOut = false
+      let filterReason: string | undefined
+      if (d.box.width < minWidth) { filteredOut = true; filterReason = 'too_small' }
+      else if (cx <= edgeMargin) { filteredOut = true; filterReason = 'too_far_left' }
+      else if (cx >= frameWidth - edgeMargin) { filteredOut = true; filterReason = 'too_far_right' }
+      return {
+        score: d.score,
+        box: { x: d.box.x, y: d.box.y, width: d.box.width, height: d.box.height },
+        centerX: cx,
+        centerY: d.box.y + d.box.height / 2,
+        area: d.box.width * d.box.height,
+        filteredOut,
+        filterReason,
+      }
     })
-    .map(d => ({
-      x: d.box.x,
-      y: d.box.y,
-      width: d.box.width,
-      height: d.box.height,
-      centerX: d.box.x + d.box.width / 2,
-      centerY: d.box.y + d.box.height / 2,
-      area: d.box.width * d.box.height,
-    }))
 
-  if (faces.length > 1) {
-    const scored = faces.map(f => ({ f, s: faceSharpness(imageData, f) }))
-    scored.sort((a, b) => b.s - a.s)
-    console.log(`[DEBUG] sharpness scores: ${scored.map(x => Math.round(x.s)).join(' | ')} → leading with cx=${Math.round(scored[0].f.centerX)}`)
-    return { faces: scored.map(x => x.f), type: 'face' as DetectionType, rawDetections }
+    faces = detections
+      .filter(d => {
+        const cx = d.box.x + d.box.width / 2
+        return d.box.width >= minWidth && cx > edgeMargin && cx < frameWidth - edgeMargin
+      })
+      .map(d => ({
+        x: d.box.x,
+        y: d.box.y,
+        width: d.box.width,
+        height: d.box.height,
+        centerX: d.box.x + d.box.width / 2,
+        centerY: d.box.y + d.box.height / 2,
+        area: d.box.width * d.box.height,
+      }))
+
+    if (faces.length > 1) {
+      const scored = faces.map(f => ({ f, s: faceSharpness(imageData, f) }))
+      scored.sort((a, b) => b.s - a.s)
+      console.log(`[DEBUG] sharpness scores: ${scored.map(x => Math.round(x.s)).join(' | ')} → leading with cx=${Math.round(scored[0].f.centerX)}`)
+      faces = scored.map(x => x.f)
+    }
+  } finally {
+    tf.engine().endScope()
   }
 
   if (faces.length > 0) return { faces, type: 'face' as DetectionType, rawDetections }
