@@ -57,11 +57,14 @@ export function buildDynamicSmartCropFilter(
   const sceneCutAt = makeCutLookup(sceneCuts)
 
   // Build raw keyframes from face detections.
-  // 'center' is a pure no-detection fallback — skip it so we hold the last
-  // known-good position instead of drifting toward frame center.
+  // Sort by time first — timedFaces arrive in detection order (base samples
+  // interleaved with out-of-order bracket samples), not chronologically.
+  // Without sorting, the timestamp and x-position dedup checks compare against
+  // the wrong "previous" sample, causing both missed samples and duplicates.
   const rawKeyframes: Keyframe[] = []
+  const sortedFaces = [...timedFaces].sort((a, b) => a.time - b.time)
 
-  for (const tf of timedFaces) {
+  for (const tf of sortedFaces) {
     if (tf.detectionType === 'center') continue
     const face = tf.faces[0] ?? null
     if (!face) continue
