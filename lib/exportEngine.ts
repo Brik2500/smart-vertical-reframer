@@ -14,10 +14,17 @@ export async function detectVideo(
   jobId: string,
   inputPath: string
 ): Promise<{ timedFaces: TimedFace[]; dims: FrameDimensions; sampledFrames: SampledFrame[]; sceneCuts: number[] }> {
-  const { timedFaces, dims } = await detectFacesOverTime(inputPath, jobId, 20)
+  // Detect scene cuts first so we can oversample around them.
+  // Cuts are where the biggest position jumps happen — extra samples there
+  // give the outlier-rejection pass real data instead of a 3s blind spot.
   const sceneCuts = detectSceneCuts(inputPath)
-
   console.log(`[detect] found ${sceneCuts.length} scene cuts:`, sceneCuts.map(t => t.toFixed(2)).join(', '))
+
+  // Place two samples bracketing each cut: just before and just after.
+  const CUT_BRACKET = 0.4  // seconds away from the cut point
+  const cutAdjacent = sceneCuts.flatMap(c => [c - CUT_BRACKET, c + CUT_BRACKET])
+
+  const { timedFaces, dims } = await detectFacesOverTime(inputPath, jobId, 30, cutAdjacent)
 
   const sampledFrames: SampledFrame[] = timedFaces.map(tf => {
     const face = tf.faces[0] ?? null

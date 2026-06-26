@@ -304,20 +304,32 @@ async function detectFacesInFrame(imagePath: string): Promise<{ faces: FaceBox[]
   return { faces: [], type: 'center' as DetectionType, rawDetections }
 }
 
-// Sample the video at evenly spaced timestamps, returning faces per timestamp
+// Sample the video at evenly spaced timestamps plus any extra timestamps
+// (e.g. just before/after scene cuts). Deduplicates and sorts all timestamps.
 export async function detectFacesOverTime(
   videoPath: string,
   jobId: string,
-  sampleCount = 8
+  sampleCount = 30,
+  extraTimestamps: number[] = []
 ): Promise<{ timedFaces: TimedFace[]; dims: FrameDimensions }> {
   const dims = getVideoDimensions(videoPath)
   const duration = getVideoDuration(videoPath)
   const frameDir = path.join(TMP_DIR, `${jobId}_frames`)
   if (!fs.existsSync(frameDir)) fs.mkdirSync(frameDir, { recursive: true })
 
-  // Spread samples across the video, avoiding the very first/last frame
   const step = duration / (sampleCount + 1)
-  const timestamps = Array.from({ length: sampleCount }, (_, i) => parseFloat(((i + 1) * step).toFixed(2)))
+  const base = Array.from({ length: sampleCount }, (_, i) => parseFloat(((i + 1) * step).toFixed(2)))
+
+  // Merge extra timestamps (cut-adjacent), clamp to valid range, deduplicate within 0.3s
+  const margin = 0.3
+  const all = [...base]
+  for (const t of extraTimestamps) {
+    const clamped = parseFloat(Math.max(margin, Math.min(duration - margin, t)).toFixed(2))
+    if (!all.some(existing => Math.abs(existing - clamped) < margin)) {
+      all.push(clamped)
+    }
+  }
+  const timestamps = all.sort((a, b) => a - b)
 
   const timedFaces: TimedFace[] = []
   const detectionLog: Array<{ t: number; type: DetectionType; raw: RawDetection[] }> = []
