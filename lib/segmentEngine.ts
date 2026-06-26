@@ -3,7 +3,7 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import { TimedFace, FaceBox, FrameDimensions } from './faceDetection'
 import { buildDynamicSmartCropFilter, buildSmartCropFilter, computeSmartCrop, ManualKeyframe } from './cropEngine'
-import { buildSplitScreenFilter, computeSplitScreen, SplitScreenParams } from './splitScreenEngine'
+import { buildSplitScreenFilter, buildDynamicSplitScreenFilter, computeSplitScreen, SplitScreenParams } from './splitScreenEngine'
 import { TMP_DIR } from './videoUpload'
 
 export interface VideoSegment {
@@ -177,10 +177,15 @@ function renderSegment(
     : null
 
   if (splitParams) {
+    const localFaces = offsetFaces(seg.timedFaces, seg.start)
+    const filterComplex = localFaces.length >= 2
+      ? buildDynamicSplitScreenFilter(localFaces, dims, splitParams)
+      : buildSplitScreenFilter(splitParams)
+
     execFileSync(ffmpeg, [
       '-loglevel', 'error',
       ...baseArgs,
-      '-filter_complex', buildSplitScreenFilter(splitParams),
+      '-filter_complex', filterComplex,
       '-map', '[out]',
       '-map', '0:a?',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
