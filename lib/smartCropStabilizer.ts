@@ -27,6 +27,7 @@ export interface ClassifiedSegment {
   fromX: number;
   toX: number;
   type: 'cut' | 'pan';
+  cutAt?: number;  // for 'cut' segments: the exact scene-cut timestamp within (fromT, toT]
 }
 
 // ---------- 1. Scene-cut detection ----------
@@ -151,14 +152,15 @@ export function classifySegments(
     const a = keyframes[i];
     const b = keyframes[i + 1];
 
-    const hasCut = sorted.some(c => c > a.t && c <= b.t);
+    const cutAt = sorted.find(c => c > a.t && c <= b.t);
 
     segments.push({
       fromT: a.t,
       toT: b.t,
       fromX: a.x,
       toX: b.x,
-      type: hasCut ? 'cut' : 'pan',
+      type: cutAt !== undefined ? 'cut' : 'pan',
+      cutAt,
     });
   }
 
@@ -258,8 +260,11 @@ export function buildFFmpegExprFromSegments(
     let segExpr: string;
 
     if (seg.type === 'cut') {
-      // Hold fromX through the segment; toX takes over after toT
-      segExpr = String(seg.fromX);
+      // Hold outgoing position until the visual cut, then snap to incoming.
+      // cutAt is the actual scene-cut timestamp — snap there, not at toT,
+      // so we don't spend 0.75s in the new shot with the wrong crop position.
+      const snapAt = seg.cutAt ?? seg.fromT;
+      segExpr = `if(lt(t,${snapAt}),${seg.fromX},${seg.toX})`;
     } else {
       const dt = seg.toT - seg.fromT;
       const norm = `((t-${seg.fromT})/${dt.toFixed(4)})`;
