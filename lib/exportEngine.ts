@@ -125,12 +125,21 @@ function applyManualSplitScreens(
     let splitStart: number
     let splitEnd: number
 
+    // Minimum duration for before/after remainder slivers.
+    // When a manual override is near the end of a segment, the remainder
+    // can be a tiny window (e.g. 0.23s) landing right at a scene cut where
+    // the camera hasn't settled yet. Absorb it into the override instead.
+    const MIN_SLIVER = 0.5
+
     if (sceneCuts.length > 0) {
       // Snap boundaries to the scene cuts immediately before and after the marked frame.
       const cutBefore = [...sceneCuts].reverse().find(t => t < ov.time) ?? seg.start
       const cutAfter  = sceneCuts.find(t => t > ov.time) ?? seg.end
       splitStart = Math.max(seg.start, cutBefore)
       splitEnd   = Math.min(seg.end,   cutAfter)
+      // Absorb tiny remainders: if the before or after sliver is too short, expand the override.
+      if (splitStart - seg.start < MIN_SLIVER) splitStart = seg.start
+      if (seg.end - splitEnd < MIN_SLIVER)     splitEnd   = seg.end
     } else {
       // Fallback: midpoints to adjacent sampled frames, capped at ±2.5s
       const si = sampleTimes.reduce((best, t, i) =>

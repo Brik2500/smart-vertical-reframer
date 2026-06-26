@@ -6,25 +6,27 @@ export interface SplitScreenParams {
 }
 
 // Each person gets half the vertical 9:16 output.
-// We crop a portrait strip around each face from the original frame.
+// Uses full-height strips at each face's x position — same geometry as
+// manualSplitParams. The old approach (top half / bottom half of source)
+// was designed for vertically-stacked subjects; for side-by-side two-shots
+// both faces land in the upper half of the source frame, so the bottom pane
+// showed lower bodies instead of the second face.
 export function computeSplitScreen(
   faceA: FaceBox,
   faceB: FaceBox,
   dims: FrameDimensions
 ): SplitScreenParams {
-  // Output will be 1080x1920. Each half = 1080x960.
-  // Source crop for each half: 9:16 ratio of the half height
-  // Half height in source coords = dims.height / 2
-  const halfH = dims.height / 2
-  // Width of a 9:16 strip at halfH height (but we use full output width mapping)
-  // We keep full source height halves and crop a portrait strip
-  const stripW = Math.floor((halfH * 9) / 16)
+  // 9:8 strip from full source height → scales to 540x480 without distortion.
+  // Each pane crops the full frame height at the subject's x position.
+  const stripW = Math.floor(dims.height * 9 / 8)
 
   function clampX(centerX: number): number {
     return Math.max(0, Math.min(dims.width - stripW, Math.floor(centerX - stripW / 2)))
   }
 
-  // Sort: top = face with smaller centerY (higher in frame)
+  // Sort: top = face with smaller centerY (higher in frame).
+  // For horizontal two-shots with similar Y positions this is effectively
+  // stable order — consistent across frames in the same shot.
   const [topFace, bottomFace] = faceA.centerY <= faceB.centerY
     ? [faceA, faceB]
     : [faceB, faceA]
@@ -34,13 +36,13 @@ export function computeSplitScreen(
       x: clampX(topFace.centerX),
       y: 0,
       width: stripW,
-      height: Math.floor(halfH),
+      height: dims.height,
     },
     bottom: {
       x: clampX(bottomFace.centerX),
-      y: Math.floor(halfH),
+      y: 0,
       width: stripW,
-      height: dims.height - Math.floor(halfH),
+      height: dims.height,
     },
   }
 }
