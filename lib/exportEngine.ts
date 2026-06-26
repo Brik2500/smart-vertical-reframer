@@ -14,7 +14,7 @@ export async function detectVideo(
   jobId: string,
   inputPath: string
 ): Promise<{ timedFaces: TimedFace[]; dims: FrameDimensions; sampledFrames: SampledFrame[]; sceneCuts: number[] }> {
-  const { timedFaces, dims } = await detectFacesOverTime(inputPath, jobId, 12)
+  const { timedFaces, dims } = await detectFacesOverTime(inputPath, jobId, 20)
   const sceneCuts = detectSceneCuts(inputPath)
 
   console.log(`[detect] found ${sceneCuts.length} scene cuts:`, sceneCuts.map(t => t.toFixed(2)).join(', '))
@@ -61,7 +61,7 @@ export async function renderVideo(
     const decision = decideSplitScreen(timedFaces, dims, 'split-screen')
     if (decision.useSplitScreen && decision.splitFaces) {
       const segments = [{ start: 0, end: duration, type: 'split-screen' as const, timedFaces, splitFaces: decision.splitFaces }]
-      renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
+      renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes, sceneCuts)
       return outputPath
     }
   }
@@ -69,13 +69,13 @@ export async function renderVideo(
   if (mode === 'smart-crop') {
     const segments = [{ start: 0, end: duration, type: 'smart-crop' as const, timedFaces }]
     applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
-    renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
+    renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes, sceneCuts)
     return outputPath
   }
 
   const segments = classifySegments(timedFaces, dims, duration)
   applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
-  renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes)
+  renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes, sceneCuts)
   return outputPath
 }
 

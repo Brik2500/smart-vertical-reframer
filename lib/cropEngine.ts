@@ -38,7 +38,8 @@ export interface ManualKeyframe {
 export function buildDynamicSmartCropFilter(
   timedFaces: TimedFace[],
   dims: FrameDimensions,
-  manualKeyframes: ManualKeyframe[] = []
+  manualKeyframes: ManualKeyframe[] = [],
+  sceneCuts: number[] = []
 ): string {
   const { cropW, cropH } = getCropDims(dims)
   const edgeMarginX = Math.floor(cropW * 0.08)
@@ -75,30 +76,42 @@ export function buildDynamicSmartCropFilter(
   }
   keyframes.sort((a, b) => a.t - b.t)
 
-  if (keyframes.length === 0) {
+  // Outlier rejection: drop keyframes that deviate sharply from both neighbors
+  // unless there's a scene cut near that timestamp (which would legitimize the jump).
+  const OUTLIER_THRESHOLD = dims.width * 0.25
+  const cleaned = keyframes.filter((k, i) => {
+    if (i === 0 || i === keyframes.length - 1) return true
+    const nearCut = sceneCuts.some(c => Math.abs(c - k.t) < 1.5)
+    if (nearCut) return true
+    const neighborAvg = (keyframes[i - 1].x + keyframes[i + 1].x) / 2
+    return Math.abs(k.x - neighborAvg) <= OUTLIER_THRESHOLD
+  })
+
+  if (cleaned.length === 0) {
     const x = Math.floor((dims.width - cropW) / 2)
     return `crop=${cropW}:${cropH}:${x}:0,scale=540:960:flags=lanczos`
   }
 
-  if (keyframes.length === 1) {
-    return `crop=${cropW}:${cropH}:${keyframes[0].x}:${keyframes[0].y},scale=540:960:flags=lanczos`
+  if (cleaned.length === 1) {
+    return `crop=${cropW}:${cropH}:${cleaned[0].x}:${cleaned[0].y},scale=540:960:flags=lanczos`
   }
 
-  const xExpr = buildMotionExpression(keyframes, 'x', maxX, dims.width)
+  const xExpr = buildMotionExpression(cleaned, 'x', maxX, dims.width, sceneCuts)
   return `crop=${cropW}:${cropH}:'${xExpr}':0,scale=540:960:flags=lanczos`
 }
 
 // Determines whether to snap (cut) or ease (pan) between keyframes.
-// Large X jumps are camera cuts — hold the previous position rather than
-// panning through dead space. Small/medium movements are pans — ease them.
+// Cut decision is driven by detected scene cuts and large pixel jumps —
+// NOT by time gaps between samples, which were causing false cut classifications
+// when sampling was sparser than the old 5-second time threshold.
 function buildMotionExpression(
   keyframes: Keyframe[],
   axis: 'x' | 'y',
   maxVal: number,
-  frameSize: number
+  frameSize: number,
+  sceneCuts: number[] = []
 ): string {
   const CUT_THRESHOLD = frameSize * 0.30  // 30% of frame width = likely a cut, not a pan
-  const TIME_GAP_THRESHOLD = 5            // seconds — long gap means a cutaway happened
 
   let expr = String(keyframes[keyframes.length - 1][axis])
 
@@ -111,16 +124,17 @@ function buildMotionExpression(
     const dv = Math.abs(v1 - v0)
     if (dt <= 0) continue
 
+    // A real cut exists between these two keyframes if scene detection found one.
+    const hasSceneCut = sceneCuts.some(c => c > k0.t && c < k1.t)
+    const isLargeJump = dv > CUT_THRESHOLD
+
     let segExpr: string
 
-    if (dv > CUT_THRESHOLD || dt > TIME_GAP_THRESHOLD) {
-      // Cut or long gap: hold current position through the gap, snap to next at k1.t.
-      // Long time gaps (>5s between valid face detections) mean a cutaway happened —
-      // interpolating through that gap would pan the crop across empty space.
+    if (hasSceneCut || isLargeJump) {
+      // Known cut or huge pixel jump: hold position and snap at the next keyframe.
       segExpr = String(v0)
     } else {
-      // Pan: ease-in-out interpolation (smoothstep) for natural camera movement
-      // smoothstep: 3t² - 2t³ where t = normalized time in segment
+      // Same continuous shot: smoothstep ease (3t² - 2t³) for natural movement.
       const norm = `((t-${k0.t})/${dt.toFixed(4)})`
       const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`
       const eased = `(${v0}+(${v1 - v0})*${smooth})`

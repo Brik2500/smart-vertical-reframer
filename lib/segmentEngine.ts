@@ -116,19 +116,20 @@ export function renderVideoWithSegments(
   dims: FrameDimensions,
   jobId: string,
   outputPath: string,
-  manualKeyframes: ManualKeyframe[] = []
+  manualKeyframes: ManualKeyframe[] = [],
+  sceneCuts: number[] = []
 ): void {
   const ffmpeg = ffmpegBin()
 
   if (segments.length === 1) {
-    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes)
+    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes, sceneCuts)
     return
   }
 
   const segPaths: string[] = []
   for (let i = 0; i < segments.length; i++) {
     const segOut = path.join(TMP_DIR, `${jobId}_seg${i}.mp4`)
-    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes)
+    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts)
     segPaths.push(segOut)
   }
 
@@ -155,7 +156,8 @@ function renderSegment(
   dims: FrameDimensions,
   outputPath: string,
   jobId: string,
-  manualKeyframes: ManualKeyframe[] = []
+  manualKeyframes: ManualKeyframe[] = [],
+  sceneCuts: number[] = []
 ): void {
   const duration = seg.end - seg.start
   const baseArgs = [
@@ -181,8 +183,10 @@ function renderSegment(
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
   } else {
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
+    // Offset scene cut timestamps to match local segment time (t=0 at seg.start)
+    const localCuts = sceneCuts.map(c => c - seg.start).filter(c => c > 0 && c < seg.end - seg.start)
     const vf = localFaces.length > 1
-      ? buildDynamicSmartCropFilter(localFaces, dims, manualKeyframes)
+      ? buildDynamicSmartCropFilter(localFaces, dims, manualKeyframes, localCuts)
       : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
 
     execFileSync(ffmpeg, [
