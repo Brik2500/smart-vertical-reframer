@@ -62,10 +62,19 @@ export function buildSplitScreenFilter(params: SplitScreenParams): string {
 // Handles the intermittent single-face case (head turn, occlusion, motion blur)
 // by holding the missing pane at its last known position instead of duplicating
 // the one visible face into both panes.
+// Per-sample record used for dense end-of-segment logging.
+type SplitSampleRecord = {
+  t: number;
+  detCount: number;
+  topX: number; topCx: number; topFaceIdx: number | null;   // null = held
+  botX: number; botCx: number; botFaceIdx: number | null;
+}
+
 export function buildDynamicSplitScreenFilter(
   timedFaces: TimedFace[],
   dims: FrameDimensions,
-  initialParams: SplitScreenParams
+  initialParams: SplitScreenParams,
+  segmentDuration?: number   // used only for dense end-of-segment logging
 ): string {
   const stripW = Math.floor(dims.height * 9 / 8)
   const maxX   = dims.width - stripW
@@ -87,24 +96,66 @@ export function buildDynamicSplitScreenFilter(
   const sorted = [...timedFaces].sort((a, b) => a.time - b.time)
 
   const sampleLog: string[] = []
+  const records: SplitSampleRecord[] = []
 
   for (const tf of sorted) {
     const detections = tf.faces.map(f => ({ cx: f.centerX, width: f.width }))
     const resolved = resolveSplitScreenPanes({ t: tf.time, detections, previousPanes: prevPanes })
 
-    const topX    = toX(resolved.top.cx)
-    const bottomX = toX(resolved.bottom.cx)
+    const topX = toX(resolved.top.cx)
+    const botX = toX(resolved.bottom.cx)
     topKF.push(    { t: tf.time, x: topX })
-    bottomKF.push( { t: tf.time, x: bottomX })
+    bottomKF.push( { t: tf.time, x: botX })
 
-    const topStatus    = resolved.top.lastUpdatedAt    === tf.time ? `${topX}`         : `HOLD(${topX})`
-    const bottomStatus = resolved.bottom.lastUpdatedAt === tf.time ? `${bottomX}`      : `HOLD(${bottomX})`
-    sampleLog.push(`t=${tf.time.toFixed(2)} det=${detections.length} top=${topStatus} bot=${bottomStatus}`)
+    // Infer which detected face index went to each pane (for logging only).
+    let topFaceIdx: number | null = null
+    let botFaceIdx: number | null = null
+    if (detections.length >= 2) {
+      const aToTop = Math.abs(detections[0].cx - resolved.top.cx) <= Math.abs(detections[1].cx - resolved.top.cx)
+      topFaceIdx = aToTop ? 0 : 1
+      botFaceIdx = aToTop ? 1 : 0
+    } else if (detections.length === 1) {
+      if (resolved.top.lastUpdatedAt    === tf.time) topFaceIdx = 0
+      else                                           botFaceIdx = 0
+    }
+
+    records.push({ t: tf.time, detCount: detections.length,
+      topX, topCx: resolved.top.cx,    topFaceIdx,
+      botX, botCx: resolved.bottom.cx, botFaceIdx })
+
+    const topStatus = topFaceIdx !== null ? `${topX}` : `HOLD(${topX})`
+    const botStatus = botFaceIdx !== null ? `${botX}` : `HOLD(${botX})`
+    sampleLog.push(`t=${tf.time.toFixed(2)} det=${detections.length} top=${topStatus} bot=${botStatus}`)
 
     prevPanes = resolved
   }
 
   console.log(`[split] samples (${sorted.length}): ${sampleLog.join(' | ')}`)
+
+  // Dense end-of-segment logging: 0.1s ticks in the last 1s.
+  // Evaluates the hold expression at each tick by looking up the active sample
+  // (last sample at or before that time) — no new detections, logging only.
+  if (segmentDuration !== undefined && records.length > 0) {
+    const winStart = Math.max(0, segmentDuration - 1.0)
+    const denseLogs: string[] = []
+    for (let i = 0; i <= 10; i++) {
+      const tick = parseFloat((winStart + i * 0.1).toFixed(2))
+      if (tick > segmentDuration + 0.005) break
+      let active: SplitSampleRecord | null = null
+      for (const r of records) { if (r.t <= tick + 0.001) active = r }
+      if (!active) continue
+      const topLabel = active.topFaceIdx !== null
+        ? `${active.topX}(face${active.topFaceIdx},cx=${active.topCx})`
+        : `HOLD(${active.topX},cx=${active.topCx})`
+      const botLabel = active.botFaceIdx !== null
+        ? `${active.botX}(face${active.botFaceIdx},cx=${active.botCx})`
+        : `HOLD(${active.botX},cx=${active.botCx})`
+      denseLogs.push(`t=${tick.toFixed(2)} det=${active.detCount} top=${topLabel} bot=${botLabel}`)
+    }
+    if (denseLogs.length > 0) {
+      console.log(`[split] dense ${winStart.toFixed(2)}-${segmentDuration.toFixed(2)}s: ${denseLogs.join(' | ')}`)
+    }
+  }
 
   const topX    = buildHoldExpr(topKF,    initialParams.top.x)
   const bottomX = buildHoldExpr(bottomKF, initialParams.bottom.x)

@@ -179,7 +179,7 @@ function renderSegment(
   if (splitParams) {
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
     const filterComplex = localFaces.length >= 2
-      ? buildDynamicSplitScreenFilter(localFaces, dims, splitParams)
+      ? buildDynamicSplitScreenFilter(localFaces, dims, splitParams, duration)
       : buildSplitScreenFilter(splitParams)
 
     execFileSync(ffmpeg, [
