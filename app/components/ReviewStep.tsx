@@ -29,6 +29,26 @@ function formatTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`
 }
 
+function formatSeconds(s: number): string {
+  return `${s.toFixed(1)}s`
+}
+
+// Minimap bar: shows where the crop window sits within the full frame width.
+// The highlighted segment tracks the current cropX live as you drag.
+function CropPositionBar({ cropX, frameW, cropW }: { cropX: number; frameW: number; cropW: number }) {
+  const maxX = frameW - cropW
+  const leftPct = maxX > 0 ? (cropX / maxX) * (1 - cropW / frameW) * 100 : 0
+  const widthPct = (cropW / frameW) * 100
+  return (
+    <div className="relative h-1 bg-zinc-700 rounded-full overflow-hidden">
+      <div
+        className="absolute h-full bg-indigo-400 rounded-full transition-none"
+        style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+      />
+    </div>
+  )
+}
+
 const DISPLAY_W = 260
 
 // A single draggable crop box overlay on one copy of the frame thumbnail.
@@ -118,6 +138,8 @@ function FrameCard({
   cropX,
   cropX2,
   splitScreen,
+  prevCropX,
+  nextCropX,
   onChange,
   onChange2,
   onToggleSplit,
@@ -127,6 +149,8 @@ function FrameCard({
   cropX: number
   cropX2: number
   splitScreen: boolean
+  prevCropX?: number
+  nextCropX?: number
   onChange: (x: number) => void
   onChange2: (x: number) => void
   onToggleSplit: () => void
@@ -141,6 +165,13 @@ function FrameCard({
   const displaySplitW = Math.min(DISPLAY_W, splitStripW * scale)
 
   const isModified = !splitScreen && Math.abs(cropX - frame.cropX) > 2
+
+  // Jump warning: flag when this frame's crop is far from a neighbor's.
+  // Threshold: 25% of frame width (≈480px on 1920-wide footage).
+  const JUMP_THRESHOLD = frame.frameW * 0.25
+  const jumpFromPrev = !splitScreen && prevCropX !== undefined && Math.abs(cropX - prevCropX) > JUMP_THRESHOLD
+  const jumpToNext  = !splitScreen && nextCropX !== undefined && Math.abs(cropX - nextCropX) > JUMP_THRESHOLD
+  const hasJump = jumpFromPrev || jumpToNext
 
   // Shared drag state for single-crop mode
   const isDragging = useRef(false)
@@ -249,12 +280,35 @@ function FrameCard({
         </div>
       )}
 
+      {/* Position minimap — only in single-crop mode */}
+      {!splitScreen && (
+        <CropPositionBar cropX={cropX} frameW={frame.frameW} cropW={frame.cropW} />
+      )}
+
+      {/* Timestamp + detection label */}
       <div className="flex items-center justify-between px-0.5">
-        <span className="text-xs text-zinc-400">{formatTime(frame.time)}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-zinc-400">{formatTime(frame.time)}</span>
+          <span className="text-[10px] text-zinc-600">{formatSeconds(frame.time)}</span>
+        </div>
         <span className={`text-[10px] font-medium ${DETECTION_COLORS[frame.detectionType] ?? 'text-zinc-500'}`}>
           {DETECTION_LABELS[frame.detectionType] ?? frame.detectionType}
         </span>
       </div>
+
+      {/* Jump warning — live, updates as neighbors are adjusted */}
+      {hasJump && (
+        <div className="flex items-center gap-1 px-0.5">
+          <span className="text-amber-400 text-[10px]">⚠</span>
+          <span className="text-[10px] text-amber-400">
+            {jumpFromPrev && jumpToNext
+              ? 'big jump from previous and to next frame'
+              : jumpFromPrev
+              ? 'big jump from previous frame'
+              : 'big jump to next frame'}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -309,7 +363,7 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        {frames.map(f => (
+        {frames.map((f, i) => (
           <FrameCard
             key={f.time}
             frame={f}
@@ -317,6 +371,8 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
             cropX={cropPositions[f.time]}
             cropX2={cropPositions2[f.time]}
             splitScreen={splitModes[f.time] ?? false}
+            prevCropX={i > 0 ? cropPositions[frames[i - 1].time] : undefined}
+            nextCropX={i < frames.length - 1 ? cropPositions[frames[i + 1].time] : undefined}
             onChange={x => setCropPositions(prev => ({ ...prev, [f.time]: x }))}
             onChange2={x => setCropPositions2(prev => ({ ...prev, [f.time]: x }))}
             onToggleSplit={() => setSplitModes(prev => ({ ...prev, [f.time]: !prev[f.time] }))}
