@@ -48,7 +48,8 @@ export function buildDynamicSmartCropFilter(
   timedFaces: TimedFace[],
   dims: FrameDimensions,
   manualKeyframes: ManualKeyframe[] = [],
-  sceneCuts: number[] = []
+  sceneCuts: number[] = [],
+  segmentDuration?: number
 ): string {
   const { cropW, cropH } = getCropDims(dims)
   const edgeMarginX = Math.floor(cropW * 0.08)
@@ -119,7 +120,7 @@ export function buildDynamicSmartCropFilter(
     return `crop=${cropW}:${cropH}:${frameCenterX}:0,scale=540:960:flags=lanczos`
   }
 
-  const xExpr = buildFFmpegExprFromSegments(segments, maxX, frameCenterX)
+  const xExpr = buildFFmpegExprFromSegments(segments, maxX, frameCenterX, segmentDuration)
   return `crop=${cropW}:${cropH}:'${xExpr}':0,scale=540:960:flags=lanczos`
 }
 

@@ -351,7 +351,7 @@ function renderSegment(
       .filter(mk => mk.t >= seg.start && mk.t <= seg.end)
       .map(mk => ({ ...mk, t: mk.t - seg.start }))
     const vf = localFaces.length > 1
-      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts)
+      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts, duration)
       : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
 
     execFileSync(ffmpeg, [

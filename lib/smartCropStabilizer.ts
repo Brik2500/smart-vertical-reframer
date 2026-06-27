@@ -255,15 +255,45 @@ export function buildStabilizedSegments(
 // expression compatible with buildDynamicSmartCropFilter's output format.
 // Cut segments snap instantly; pan segments smoothstep-ease.
 
+// Maximum seconds past the last keyframe (or before the first) to hold a stale
+// position before easing back toward frame center. Tune downward for fast-moving
+// content where 0.8s of stale hold is still too long.
+const STALE_HOLD_THRESHOLD = 0.8
+
 export function buildFFmpegExprFromSegments(
   segments: ClassifiedSegment[],
   maxX: number,
-  frameCenterX: number
+  frameCenterX: number,
+  segmentDuration?: number
 ): string {
   if (segments.length === 0) return String(frameCenterX);
 
-  // Start from the tail (last known-good position)
-  let expr = String(segments[segments.length - 1].toX);
+  const last = segments[segments.length - 1];
+
+  // Tail: hold at last keyframe position for STALE_HOLD_THRESHOLD seconds, then
+  // smoothstep back toward frame center for any remaining duration. Prevents a
+  // stale hold from keeping an empty crop on the wrong subject when no detection
+  // exists for a long window before the segment end.
+  // Falls through to constant hold when segmentDuration is not provided (backward compat).
+  let expr: string;
+  if (segmentDuration !== undefined) {
+    const holdEnd = last.toT + STALE_HOLD_THRESHOLD;
+    if (holdEnd < segmentDuration) {
+      const easeOver = segmentDuration - holdEnd;
+      const norm = `((t-${holdEnd.toFixed(4)})/${easeOver.toFixed(4)})`;
+      const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
+      const eased = `(${last.toX}+(${frameCenterX - last.toX})*${smooth})`;
+      console.log(
+        `[crop] stale hold at ${last.toT.toFixed(2)}s (seg ends ${segmentDuration.toFixed(2)}s): ` +
+        `holding ${STALE_HOLD_THRESHOLD}s then easing to center over ${easeOver.toFixed(2)}s`
+      )
+      expr = `if(lt(t,${holdEnd.toFixed(4)}),${last.toX},max(0,min(${maxX},${eased})))`
+    } else {
+      expr = String(last.toX)
+    }
+  } else {
+    expr = String(last.toX)
+  }
 
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
@@ -286,12 +316,25 @@ export function buildFFmpegExprFromSegments(
     expr = `if(between(t,${seg.fromT},${seg.toT}),${segExpr},${expr})`;
   }
 
-  // Pre-roll: ease from frame center to first keyframe position
+  // Pre-roll: symmetric stale-hold logic.
+  // Within STALE_HOLD_THRESHOLD of the first keyframe: smoothstep from center to
+  // first.fromX so the subject entry is smooth. Beyond the threshold: hold at center,
+  // since we have no data and center is statistically safer than a stale position.
+  // For the common case (post-cut bracket lands ~0.75s in), first.fromT ≤ threshold
+  // so we just hold at first.fromX from t=0 — the new branch only fires when early
+  // low-confidence samples get filtered out and the first keyframe is further in.
   const first = segments[0];
   if (first.fromT > 0) {
-    const norm = `(t/${first.fromT.toFixed(4)})`;
-    const preLerp = `(${frameCenterX}+(${first.fromX - frameCenterX})*${norm})`;
-    expr = `if(lt(t,${first.fromT}),max(0,min(${maxX},${preLerp})),${expr})`;
+    if (first.fromT > STALE_HOLD_THRESHOLD) {
+      const easeStart = first.fromT - STALE_HOLD_THRESHOLD;
+      const norm = `((t-${easeStart.toFixed(4)})/${STALE_HOLD_THRESHOLD.toFixed(4)})`;
+      const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
+      const eased = `max(0,min(${maxX},(${frameCenterX}+(${first.fromX - frameCenterX})*${smooth})))`;
+      expr = `if(lt(t,${easeStart.toFixed(4)}),${frameCenterX},if(lt(t,${first.fromT}),${eased},${expr}))`;
+    } else {
+      // Short pre-roll — hold at first detected position from t=0.
+      expr = `if(lt(t,${first.fromT}),${first.fromX},${expr})`;
+    }
   }
 
   return expr;
