@@ -320,6 +320,31 @@ function renderSegment(
           `${localFaces.length} sample(s) — static params top=${splitParams.top.x} bot=${splitParams.bottom.x}`
         )
       }
+
+      // Diagnostic: when a single sample reports 2 faces, check whether the two
+      // bounding boxes look like the same person detected twice (motion blur,
+      // reflection, partial occlusion). Genuine two-person detections should have
+      // well-separated, non-overlapping boxes. Flag as SUSPECT_DUPLICATE if IoU
+      // exceeds 0.4 or center distance is < 30% of average face width.
+      if (localFaces.length === 1 && localFaces[0].faces.length >= 2) {
+        const fa = localFaces[0].faces[0]
+        const fb = localFaces[0].faces[1]
+        const xOverlap = Math.max(0, Math.min(fa.x + fa.width, fb.x + fb.width) - Math.max(fa.x, fb.x))
+        const yOverlap = Math.max(0, Math.min(fa.y + fa.height, fb.y + fb.height) - Math.max(fa.y, fb.y))
+        const intersection = xOverlap * yOverlap
+        const union = fa.width * fa.height + fb.width * fb.height - intersection
+        const iou = union > 0 ? intersection / union : 0
+        const centerDist = Math.abs(fa.centerX - fb.centerX)
+        const avgWidth = (fa.width + fb.width) / 2
+        const suspect = iou > 0.4 || centerDist < avgWidth * 0.3
+        console.log(
+          `[split] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)}: 1-sample 2-face detection — ` +
+          `faceA=[x=${fa.x},y=${fa.y},w=${fa.width},h=${fa.height},cx=${fa.centerX.toFixed(0)}] ` +
+          `faceB=[x=${fb.x},y=${fb.y},w=${fb.width},h=${fb.height},cx=${fb.centerX.toFixed(0)}] ` +
+          `iou=${iou.toFixed(3)} centerDist=${centerDist.toFixed(0)}px avgW=${avgWidth.toFixed(0)}px` +
+          (suspect ? ' ⚑ SUSPECT_DUPLICATE' : '')
+        )
+      }
     }
 
     const filterComplex = localFaces.length >= 2
