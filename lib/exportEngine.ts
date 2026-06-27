@@ -137,9 +137,13 @@ function applyManualSplitScreens(
       const cutAfter  = sceneCuts.find(t => t > ov.time) ?? seg.end
       splitStart = Math.max(seg.start, cutBefore)
       splitEnd   = Math.min(seg.end,   cutAfter)
-      // Absorb tiny remainders: if the before or after sliver is too short, expand the override.
+      // Absorb tiny remainders into the override — but never absorb a sliver that begins
+      // at a scene cut. Post-cut content belongs to the new shot; forcing it into the
+      // split-screen override produces a duplicate-face glitch because pre-cut crop
+      // positions are held into a shot that may have only one visible subject.
       if (splitStart - seg.start < MIN_SLIVER) splitStart = seg.start
-      if (seg.end - splitEnd < MIN_SLIVER)     splitEnd   = seg.end
+      const afterStartsAtCut = sceneCuts.some(c => Math.abs(c - splitEnd) < 0.05)
+      if (seg.end - splitEnd < MIN_SLIVER && !afterStartsAtCut) splitEnd = seg.end
     } else {
       // Fallback: midpoints to adjacent sampled frames, capped at ±2.5s
       const si = sampleTimes.reduce((best, t, i) =>
@@ -170,10 +174,17 @@ function applyManualSplitScreens(
     })
 
     if (splitEnd < seg.end) {
+      // If the after-sliver begins at a scene cut, the content is from the new shot
+      // and the split-screen params are meaningless for it. Force smart-crop so it
+      // renders a centered single-pane crop rather than a broken split-screen frame.
+      const sliversStartsAtCut = sceneCuts.some(c => Math.abs(c - splitEnd) < 0.05)
       replacements.push({
         ...seg,
         start: splitEnd,
+        type: sliversStartsAtCut ? 'smart-crop' : seg.type,
         timedFaces: seg.timedFaces.filter(tf => tf.time >= splitEnd),
+        splitFaces:       sliversStartsAtCut ? undefined : seg.splitFaces,
+        manualSplitParams: sliversStartsAtCut ? undefined : seg.manualSplitParams,
       })
     }
 
