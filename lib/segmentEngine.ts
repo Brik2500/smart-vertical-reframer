@@ -102,22 +102,45 @@ export function classifySegments(
   // classifySegments boundaries are detection-sample midpoints, independent of cuts,
   // so a single face-count run can span multiple shots. Splitting here ensures no
   // segment ever applies pre-cut hold positions to post-cut content during render.
+  //
+  // The end guard is intentionally absent: we filter only the start boundary (cut must
+  // be > seg.start + 0.02 to avoid zero-width pre-cut slivers), but allow cuts right up
+  // to seg.end. When a cut lands within MIN_SLIVER of the end, we snap the segment end
+  // to the cut and shift the following segment's start back rather than creating a
+  // meaningless tiny tail sub-segment.
   if (sceneCuts.length > 0) {
+    const MIN_SLIVER = 0.5
     const split: VideoSegment[] = []
-    for (const seg of segments) {
+    for (let si = 0; si < segments.length; si++) {
+      const seg = segments[si]
       const internal = sceneCuts
-        .filter(c => c > seg.start + 0.02 && c < seg.end - 0.02)
+        .filter(c => c > seg.start + 0.02 && c < seg.end)
         .sort((a, b) => a - b)
       if (internal.length === 0) {
         split.push(seg)
         continue
       }
       let cursor = seg.start
+      let snapped = false
       for (const cut of internal) {
+        const tail = seg.end - cut
+        if (tail < MIN_SLIVER) {
+          // Tiny tail after this cut — snap segment end to the cut and extend the
+          // next segment's start back to fill the gap. Avoids a meaningless sliver
+          // of post-cut content being rendered with stale pre-cut crop positions.
+          split.push(makeSubSegment(seg, cursor, cut, dims))
+          if (si + 1 < segments.length) {
+            segments[si + 1] = { ...segments[si + 1], start: cut }
+          }
+          snapped = true
+          break
+        }
         split.push(makeSubSegment(seg, cursor, cut, dims))
         cursor = cut
       }
-      split.push(makeSubSegment(seg, cursor, seg.end, dims))
+      if (!snapped) {
+        split.push(makeSubSegment(seg, cursor, seg.end, dims))
+      }
     }
     segments.length = 0
     segments.push(...split)

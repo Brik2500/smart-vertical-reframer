@@ -86,6 +86,8 @@ export async function renderVideo(
 
   const segments = classifySegments(timedFaces, dims, duration, sceneCuts)
   applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
+  console.log(`[render] ─── FINAL SEGMENTS after overrides (${segments.length}) ───`)
+  segments.forEach((s, i) => console.log(`[render]   ${i + 1}: ${s.type.toUpperCase().padEnd(14)} ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s`))
   renderVideoWithSegments(inputPath, segments, dims, jobId, outputPath, manualKeyframes, sceneCuts)
   return outputPath
 }
