@@ -27,7 +27,8 @@ function ffmpegBin(): string {
 export function classifySegments(
   timedFaces: TimedFace[],
   dims: FrameDimensions,
-  duration: number
+  duration: number,
+  sceneCuts: number[] = []
 ): VideoSegment[] {
   if (timedFaces.length === 0) {
     return [{ start: 0, end: duration, type: 'smart-crop', timedFaces: [] }]
@@ -97,10 +98,71 @@ export function classifySegments(
     splitFaces: segSplitFaces,
   })
 
+  // Split any segment that spans an internal scene cut.
+  // classifySegments boundaries are detection-sample midpoints, independent of cuts,
+  // so a single face-count run can span multiple shots. Splitting here ensures no
+  // segment ever applies pre-cut hold positions to post-cut content during render.
+  if (sceneCuts.length > 0) {
+    const split: VideoSegment[] = []
+    for (const seg of segments) {
+      const internal = sceneCuts
+        .filter(c => c > seg.start + 0.02 && c < seg.end - 0.02)
+        .sort((a, b) => a - b)
+      if (internal.length === 0) {
+        split.push(seg)
+        continue
+      }
+      let cursor = seg.start
+      for (const cut of internal) {
+        split.push(makeSubSegment(seg, cursor, cut, dims))
+        cursor = cut
+      }
+      split.push(makeSubSegment(seg, cursor, seg.end, dims))
+    }
+    segments.length = 0
+    segments.push(...split)
+  }
+
   console.log(`[DEBUG] ─── SEGMENTS (${segments.length}) ───`)
   segments.forEach(s => console.log(`[DEBUG]   ${s.type.toUpperCase().padEnd(14)} ${s.start.toFixed(1)}s → ${s.end.toFixed(1)}s`))
 
   return segments
+}
+
+// Slice a parent segment to [from, to) and re-evaluate its type using only
+// the face samples in that window. Re-evaluation is required because a scene
+// cut can change face count even within a continuous face-count run
+// (e.g. two-shot → single-person after the cut).
+function makeSubSegment(
+  parent: VideoSegment,
+  from: number,
+  to: number,
+  dims: FrameDimensions
+): VideoSegment {
+  const faces = parent.timedFaces.filter(tf => tf.time >= from && tf.time < to)
+
+  let isTwoShot = false
+  let splitFaces: [FaceBox, FaceBox] | undefined
+  for (const tf of faces) {
+    if (tf.faces.length >= 2) {
+      const a = tf.faces[0], b = tf.faces[1]
+      const span = Math.max(a.x + a.width, b.x + b.width) - Math.min(a.x, b.x)
+      if (span > dims.width * 0.5) {
+        isTwoShot = true
+        splitFaces = [a, b]
+        break
+      }
+    }
+  }
+
+  return {
+    start: from,
+    end: to,
+    type: isTwoShot ? 'split-screen' : 'smart-crop',
+    timedFaces: faces,
+    splitFaces,
+    manualSplitParams: isTwoShot ? parent.manualSplitParams : undefined,
+  }
 }
 
 // Offset timed face timestamps to be relative to segment start.
