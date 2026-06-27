@@ -217,18 +217,31 @@ export function renderVideoWithSegments(
 
   if (segments.length === 1) {
     console.log(`[render] single segment — starting FFmpeg render`)
-    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes, sceneCuts)
+    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes, sceneCuts, null)
     console.log(`[render] FFmpeg render complete`)
     return
   }
 
   const segPaths: string[] = []
+  let lastValidSplitParams: SplitScreenParams | null = null
   for (let i = 0; i < segments.length; i++) {
     const segOut = path.join(TMP_DIR, `${jobId}_seg${i}.mp4`)
     console.log(`[render] segment ${i + 1}/${segments.length} (${segments[i].type}) ${segments[i].start.toFixed(1)}s→${segments[i].end.toFixed(1)}s`)
-    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts)
+    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts, lastValidSplitParams)
     console.log(`[render] segment ${i + 1}/${segments.length} done`)
     segPaths.push(segOut)
+
+    // Advance the fallback pointer only on genuinely distinct pane positions.
+    // Uses the segment's own original params (not effectiveSplitParams) so a bailed-out
+    // degenerate segment never poisons the pointer for subsequent segments.
+    const seg = segments[i]
+    if (seg.type === 'split-screen') {
+      const sp = seg.manualSplitParams
+        ?? (seg.splitFaces ? computeSplitScreen(seg.splitFaces[0], seg.splitFaces[1], dims) : null)
+      if (sp && sp.top.x !== sp.bottom.x) {
+        lastValidSplitParams = sp
+      }
+    }
   }
 
   // Write concat playlist and merge
@@ -257,7 +270,8 @@ function renderSegment(
   outputPath: string,
   jobId: string,
   manualKeyframes: ManualKeyframe[] = [],
-  sceneCuts: number[] = []
+  sceneCuts: number[] = [],
+  lastValidSplitParams: SplitScreenParams | null = null
 ): void {
   const duration = seg.end - seg.start
   const baseArgs = [
@@ -272,9 +286,45 @@ function renderSegment(
 
   if (splitParams) {
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
+
+    let effectiveSplitParams = splitParams
+    if (localFaces.length < 2) {
+      if (splitParams.top.x === splitParams.bottom.x) {
+        // Both panes point at the same source X — would show the same content in both
+        // output halves. Inherit the last segment that had distinct, usable positions.
+        if (lastValidSplitParams) {
+          console.warn(
+            `[split] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)}: ` +
+            `${localFaces.length} sample(s), degenerate static params (top=bot=${splitParams.top.x}) — ` +
+            `inheriting panes from prior segment: top=${lastValidSplitParams.top.x} bot=${lastValidSplitParams.bottom.x}`
+          )
+          effectiveSplitParams = lastValidSplitParams
+        } else {
+          // No prior segment with valid positions — spread strips to maximum separation.
+          // top.width and bottom.width are always equal (both use dims.height * 9/8).
+          const maxX = dims.width - splitParams.top.width
+          effectiveSplitParams = {
+            top:    { ...splitParams.top,    x: 0    },
+            bottom: { ...splitParams.bottom, x: maxX },
+          }
+          console.warn(
+            `[split] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)}: ` +
+            `${localFaces.length} sample(s), degenerate static params (top=bot=${splitParams.top.x}), ` +
+            `no prior split data — using spread default (top=0 bot=${maxX})`
+          )
+        }
+      } else {
+        // Non-degenerate static params, too few samples for dynamic filter — log only.
+        console.log(
+          `[split] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)}: ` +
+          `${localFaces.length} sample(s) — static params top=${splitParams.top.x} bot=${splitParams.bottom.x}`
+        )
+      }
+    }
+
     const filterComplex = localFaces.length >= 2
-      ? buildDynamicSplitScreenFilter(localFaces, dims, splitParams, duration)
-      : buildSplitScreenFilter(splitParams)
+      ? buildDynamicSplitScreenFilter(localFaces, dims, effectiveSplitParams, duration)
+      : buildSplitScreenFilter(effectiveSplitParams)
 
     execFileSync(ffmpeg, [
       '-loglevel', 'error',
@@ -288,10 +338,20 @@ function renderSegment(
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
   } else {
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
-    // Offset scene cut timestamps to match local segment time (t=0 at seg.start)
-    const localCuts = sceneCuts.map(c => c - seg.start).filter(c => c > 0 && c < seg.end - seg.start)
+    // Offset scene cut timestamps to local segment time (t=0 at seg.start).
+    // Use <= for the end boundary so cuts that fall exactly at the segment edge are
+    // included — previously < excluded boundary cuts, causing them to be absent from
+    // localCuts and misclassified as 'pan' by classifySegments in smartCropStabilizer.
+    const localCuts = sceneCuts.map(c => c - seg.start).filter(c => c > 0 && c <= seg.end - seg.start)
+    // Restrict manual keyframes to this segment's time range and convert to local time.
+    // The global list includes keyframes from other segments; passing it unfiltered causes
+    // out-of-segment keyframes to appear at wrong offsets for seg.start > 0 and produces
+    // spurious pan transitions to unrelated shots across cut boundaries.
+    const localManualKF = manualKeyframes
+      .filter(mk => mk.t >= seg.start && mk.t <= seg.end)
+      .map(mk => ({ ...mk, t: mk.t - seg.start }))
     const vf = localFaces.length > 1
-      ? buildDynamicSmartCropFilter(localFaces, dims, manualKeyframes, localCuts)
+      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts)
       : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
 
     execFileSync(ffmpeg, [
