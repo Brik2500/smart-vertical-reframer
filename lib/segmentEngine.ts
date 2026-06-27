@@ -406,9 +406,18 @@ function renderSegment(
     const CUT_EPSILON = 0.05
     const segStartsAtCut = sceneCuts.some(c => Math.abs(c - seg.start) < CUT_EPSILON)
     const segEndsAtCut   = sceneCuts.some(c => Math.abs(c - seg.end)   < CUT_EPSILON)
-    const vf = localFaces.length > 1
-      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts, duration, nextSegmentFirstX, prevSegmentLastX, segEndsAtCut, segStartsAtCut)
-      : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
+    let vf: string
+    if (localFaces.length > 1) {
+      vf = buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts, duration, nextSegmentFirstX, prevSegmentLastX, segEndsAtCut, segStartsAtCut)
+    } else {
+      const face = localFaces[0]?.faces[0] ?? null
+      const crop = computeSmartCrop(face, dims)
+      console.log(
+        `[crop] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)}: static fallback ` +
+        `(${localFaces.length} detection(s)) face=${face ? `cx=${face.centerX.toFixed(0)}` : 'null'} → x=${crop.x}`
+      )
+      vf = buildSmartCropFilter(crop)
+    }
 
     execFileSync(ffmpeg, [
       '-loglevel', 'error',

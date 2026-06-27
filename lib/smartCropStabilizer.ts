@@ -344,15 +344,14 @@ export function buildFFmpegExprFromSegments(
   if (first.fromT > 0) {
     if (first.fromT > STALE_HOLD_THRESHOLD) {
       const easeStart = first.fromT - STALE_HOLD_THRESHOLD;
-      if (segmentStartsAtCut) {
-        // Pre-roll boundary is a scene cut — easing from the previous shot's
-        // position would pan wrong content into the current shot. Hold at
-        // first.fromX from t=0 instead (same as the short pre-roll path).
-        console.log(`[crop] long pre-roll: pre-roll at cut boundary — holding at x=${first.fromX} (no ease)`)
+      const noEase = segmentStartsAtCut || prevSegmentLastX === undefined;
+      if (noEase) {
+        const reason = segmentStartsAtCut ? 'cut boundary' : 'no prior segment';
+        console.log(`[crop] long pre-roll: ${reason} — holding at x=${first.fromX} (no ease)`)
         expr = `if(lt(t,${first.fromT}),${first.fromX},${expr})`;
       } else {
-        const preTarget = prevSegmentLastX ?? frameCenterX;
-        const preDesc = prevSegmentLastX !== undefined ? `prev-seg x=${prevSegmentLastX}` : 'center';
+        const preTarget = prevSegmentLastX;
+        const preDesc = `prev-seg x=${prevSegmentLastX}`;
         const norm = `((t-${easeStart.toFixed(4)})/${STALE_HOLD_THRESHOLD.toFixed(4)})`;
         const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
         const eased = `max(0,min(${maxX},(${preTarget}+(${first.fromX - preTarget})*${smooth})))`;
