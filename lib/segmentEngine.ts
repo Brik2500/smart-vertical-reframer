@@ -403,8 +403,11 @@ function renderSegment(
     const localManualKF = manualKeyframes
       .filter(mk => mk.t >= seg.start && mk.t <= seg.end)
       .map(mk => ({ ...mk, t: mk.t - seg.start }))
+    const CUT_EPSILON = 0.05
+    const segStartsAtCut = sceneCuts.some(c => Math.abs(c - seg.start) < CUT_EPSILON)
+    const segEndsAtCut   = sceneCuts.some(c => Math.abs(c - seg.end)   < CUT_EPSILON)
     const vf = localFaces.length > 1
-      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts, duration, nextSegmentFirstX, prevSegmentLastX)
+      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts, duration, nextSegmentFirstX, prevSegmentLastX, segEndsAtCut, segStartsAtCut)
       : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
 
     execFileSync(ffmpeg, [

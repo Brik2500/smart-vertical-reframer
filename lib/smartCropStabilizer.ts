@@ -266,33 +266,45 @@ export function buildFFmpegExprFromSegments(
   frameCenterX: number,
   segmentDuration?: number,
   nextSegmentFirstX?: number,
-  prevSegmentLastX?: number
+  prevSegmentLastX?: number,
+  segmentEndsAtCut?: boolean,
+  segmentStartsAtCut?: boolean
 ): string {
   if (segments.length === 0) return String(frameCenterX);
 
   const last = segments[segments.length - 1];
 
-  // Tail: hold at last keyframe position for STALE_HOLD_THRESHOLD seconds, then
-  // smoothstep toward the next segment's first detected position (or frame center
-  // if no neighbor exists). Using the neighbor is almost always better than center
-  // since both segments border the same cut, so the neighbor's first detection is
-  // the best available guess for where the subject ends up.
+  // Tail: hold at last keyframe position for STALE_HOLD_THRESHOLD seconds.
+  // If the tail boundary is a scene cut, skip easing entirely — the neighbor's
+  // position belongs to a different shot and easing toward it would pan wrong
+  // content. If not a cut (sparse detection mid-shot), ease toward the next
+  // segment's first detected position (or frame center if no neighbor exists).
   // Falls through to constant hold when segmentDuration is not provided (backward compat).
   let expr: string;
   if (segmentDuration !== undefined) {
     const holdEnd = last.toT + STALE_HOLD_THRESHOLD;
     if (holdEnd < segmentDuration) {
       const easeOver = segmentDuration - holdEnd;
-      const tailTarget = nextSegmentFirstX ?? frameCenterX;
-      const tailDesc = nextSegmentFirstX !== undefined ? `next-seg x=${nextSegmentFirstX}` : 'center';
-      const norm = `((t-${holdEnd.toFixed(4)})/${easeOver.toFixed(4)})`;
-      const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
-      const eased = `(${last.toX}+(${tailTarget - last.toX})*${smooth})`;
-      console.log(
-        `[crop] stale hold at ${last.toT.toFixed(2)}s (seg ends ${segmentDuration.toFixed(2)}s): ` +
-        `holding ${STALE_HOLD_THRESHOLD}s then easing to ${tailDesc} over ${easeOver.toFixed(2)}s`
-      )
-      expr = `if(lt(t,${holdEnd.toFixed(4)}),${last.toX},max(0,min(${maxX},${eased})))`
+      if (segmentEndsAtCut) {
+        // Tail is at a scene cut — neighbor position is from a different shot.
+        // Collapse to simple hold with no ease.
+        console.log(
+          `[crop] stale hold at ${last.toT.toFixed(2)}s (seg ends ${segmentDuration.toFixed(2)}s): ` +
+          `tail at cut boundary — holding (no ease)`
+        )
+        expr = String(last.toX)
+      } else {
+        const tailTarget = nextSegmentFirstX ?? frameCenterX;
+        const tailDesc = nextSegmentFirstX !== undefined ? `next-seg x=${nextSegmentFirstX}` : 'center';
+        const norm = `((t-${holdEnd.toFixed(4)})/${easeOver.toFixed(4)})`;
+        const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
+        const eased = `(${last.toX}+(${tailTarget - last.toX})*${smooth})`;
+        console.log(
+          `[crop] stale hold at ${last.toT.toFixed(2)}s (seg ends ${segmentDuration.toFixed(2)}s): ` +
+          `holding ${STALE_HOLD_THRESHOLD}s then easing to ${tailDesc} over ${easeOver.toFixed(2)}s`
+        )
+        expr = `if(lt(t,${holdEnd.toFixed(4)}),${last.toX},max(0,min(${maxX},${eased})))`
+      }
     } else {
       expr = String(last.toX)
     }
@@ -332,14 +344,21 @@ export function buildFFmpegExprFromSegments(
   if (first.fromT > 0) {
     if (first.fromT > STALE_HOLD_THRESHOLD) {
       const easeStart = first.fromT - STALE_HOLD_THRESHOLD;
-      // Prefer the previous segment's last detected position as the pre-roll anchor.
-      const preTarget = prevSegmentLastX ?? frameCenterX;
-      const preDesc = prevSegmentLastX !== undefined ? `prev-seg x=${prevSegmentLastX}` : 'center';
-      const norm = `((t-${easeStart.toFixed(4)})/${STALE_HOLD_THRESHOLD.toFixed(4)})`;
-      const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
-      const eased = `max(0,min(${maxX},(${preTarget}+(${first.fromX - preTarget})*${smooth})))`;
-      expr = `if(lt(t,${easeStart.toFixed(4)}),${preTarget},if(lt(t,${first.fromT}),${eased},${expr}))`;
-      console.log(`[crop] long pre-roll: holding at ${preDesc} then easing to x=${first.fromX} over ${STALE_HOLD_THRESHOLD.toFixed(1)}s`)
+      if (segmentStartsAtCut) {
+        // Pre-roll boundary is a scene cut — easing from the previous shot's
+        // position would pan wrong content into the current shot. Hold at
+        // first.fromX from t=0 instead (same as the short pre-roll path).
+        console.log(`[crop] long pre-roll: pre-roll at cut boundary — holding at x=${first.fromX} (no ease)`)
+        expr = `if(lt(t,${first.fromT}),${first.fromX},${expr})`;
+      } else {
+        const preTarget = prevSegmentLastX ?? frameCenterX;
+        const preDesc = prevSegmentLastX !== undefined ? `prev-seg x=${prevSegmentLastX}` : 'center';
+        const norm = `((t-${easeStart.toFixed(4)})/${STALE_HOLD_THRESHOLD.toFixed(4)})`;
+        const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
+        const eased = `max(0,min(${maxX},(${preTarget}+(${first.fromX - preTarget})*${smooth})))`;
+        expr = `if(lt(t,${easeStart.toFixed(4)}),${preTarget},if(lt(t,${first.fromT}),${eased},${expr}))`;
+        console.log(`[crop] long pre-roll: holding at ${preDesc} then easing to x=${first.fromX} over ${STALE_HOLD_THRESHOLD.toFixed(1)}s`)
+      }
     } else {
       // Short pre-roll — hold at first detected position from t=0.
       expr = `if(lt(t,${first.fromT}),${first.fromX},${expr})`;
