@@ -166,14 +166,23 @@ function makeSubSegment(
 
   let isTwoShot = false
   let splitFaces: [FaceBox, FaceBox] | undefined
-  for (const tf of faces) {
-    if (tf.faces.length >= 2) {
-      const a = tf.faces[0], b = tf.faces[1]
-      const span = Math.max(a.x + a.width, b.x + b.width) - Math.min(a.x, b.x)
-      if (span > dims.width * 0.5) {
-        isTwoShot = true
-        splitFaces = [a, b]
-        break
+
+  // Require ≥2 detection timestamps before classifying as split-screen.
+  // A sub-segment with only 1 timestamp is typically a transition window where
+  // the detection-sample midpoint landed far from the actual shot boundary —
+  // applying static split-screen positions to the whole window causes duplicate-
+  // face frames for the unsampled portion before the detection. Smart-crop is
+  // a safer fallback: it shows a single centered pane rather than broken splits.
+  if (faces.length >= 2) {
+    for (const tf of faces) {
+      if (tf.faces.length >= 2) {
+        const a = tf.faces[0], b = tf.faces[1]
+        const span = Math.max(a.x + a.width, b.x + b.width) - Math.min(a.x, b.x)
+        if (span > dims.width * 0.5) {
+          isTwoShot = true
+          splitFaces = [a, b]
+          break
+        }
       }
     }
   }
