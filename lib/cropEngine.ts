@@ -102,10 +102,20 @@ export function buildDynamicSmartCropFilter(
   rawKeyframes.sort((a, b) => a.t - b.t)
 
   if (rawKeyframes.length === 0) {
+    console.log(
+      `[crop] 0 usable rawKF from ${timedFaces.length} localFace(s) (all center/empty)` +
+      ` → center x=${frameCenterX}` +
+      (segmentDuration !== undefined ? ` (dur=${segmentDuration.toFixed(2)}s)` : '')
+    )
     return `crop=${cropW}:${cropH}:${frameCenterX}:0,scale=540:960:flags=lanczos`
   }
 
   if (rawKeyframes.length === 1) {
+    console.log(
+      `[crop] 1 usable rawKF from ${timedFaces.length} localFace(s) t=${rawKeyframes[0].t.toFixed(2)} x=${rawKeyframes[0].x}` +
+      ` → static crop` +
+      (segmentDuration !== undefined ? ` (dur=${segmentDuration.toFixed(2)}s)` : '')
+    )
     return `crop=${cropW}:${cropH}:${rawKeyframes[0].x}:0,scale=540:960:flags=lanczos`
   }
 
