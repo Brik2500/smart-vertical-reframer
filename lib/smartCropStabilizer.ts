@@ -264,28 +264,33 @@ export function buildFFmpegExprFromSegments(
   segments: ClassifiedSegment[],
   maxX: number,
   frameCenterX: number,
-  segmentDuration?: number
+  segmentDuration?: number,
+  nextSegmentFirstX?: number,
+  prevSegmentLastX?: number
 ): string {
   if (segments.length === 0) return String(frameCenterX);
 
   const last = segments[segments.length - 1];
 
   // Tail: hold at last keyframe position for STALE_HOLD_THRESHOLD seconds, then
-  // smoothstep back toward frame center for any remaining duration. Prevents a
-  // stale hold from keeping an empty crop on the wrong subject when no detection
-  // exists for a long window before the segment end.
+  // smoothstep toward the next segment's first detected position (or frame center
+  // if no neighbor exists). Using the neighbor is almost always better than center
+  // since both segments border the same cut, so the neighbor's first detection is
+  // the best available guess for where the subject ends up.
   // Falls through to constant hold when segmentDuration is not provided (backward compat).
   let expr: string;
   if (segmentDuration !== undefined) {
     const holdEnd = last.toT + STALE_HOLD_THRESHOLD;
     if (holdEnd < segmentDuration) {
       const easeOver = segmentDuration - holdEnd;
+      const tailTarget = nextSegmentFirstX ?? frameCenterX;
+      const tailDesc = nextSegmentFirstX !== undefined ? `next-seg x=${nextSegmentFirstX}` : 'center';
       const norm = `((t-${holdEnd.toFixed(4)})/${easeOver.toFixed(4)})`;
       const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
-      const eased = `(${last.toX}+(${frameCenterX - last.toX})*${smooth})`;
+      const eased = `(${last.toX}+(${tailTarget - last.toX})*${smooth})`;
       console.log(
         `[crop] stale hold at ${last.toT.toFixed(2)}s (seg ends ${segmentDuration.toFixed(2)}s): ` +
-        `holding ${STALE_HOLD_THRESHOLD}s then easing to center over ${easeOver.toFixed(2)}s`
+        `holding ${STALE_HOLD_THRESHOLD}s then easing to ${tailDesc} over ${easeOver.toFixed(2)}s`
       )
       expr = `if(lt(t,${holdEnd.toFixed(4)}),${last.toX},max(0,min(${maxX},${eased})))`
     } else {
@@ -327,10 +332,14 @@ export function buildFFmpegExprFromSegments(
   if (first.fromT > 0) {
     if (first.fromT > STALE_HOLD_THRESHOLD) {
       const easeStart = first.fromT - STALE_HOLD_THRESHOLD;
+      // Prefer the previous segment's last detected position as the pre-roll anchor.
+      const preTarget = prevSegmentLastX ?? frameCenterX;
+      const preDesc = prevSegmentLastX !== undefined ? `prev-seg x=${prevSegmentLastX}` : 'center';
       const norm = `((t-${easeStart.toFixed(4)})/${STALE_HOLD_THRESHOLD.toFixed(4)})`;
       const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
-      const eased = `max(0,min(${maxX},(${frameCenterX}+(${first.fromX - frameCenterX})*${smooth})))`;
-      expr = `if(lt(t,${easeStart.toFixed(4)}),${frameCenterX},if(lt(t,${first.fromT}),${eased},${expr}))`;
+      const eased = `max(0,min(${maxX},(${preTarget}+(${first.fromX - preTarget})*${smooth})))`;
+      expr = `if(lt(t,${easeStart.toFixed(4)}),${preTarget},if(lt(t,${first.fromT}),${eased},${expr}))`;
+      console.log(`[crop] long pre-roll: holding at ${preDesc} then easing to x=${first.fromX} over ${STALE_HOLD_THRESHOLD.toFixed(1)}s`)
     } else {
       // Short pre-roll — hold at first detected position from t=0.
       expr = `if(lt(t,${first.fromT}),${first.fromX},${expr})`;

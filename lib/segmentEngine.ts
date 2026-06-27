@@ -203,6 +203,30 @@ function offsetFaces(timedFaces: TimedFace[], offset: number): TimedFace[] {
   return timedFaces.map(tf => ({ ...tf, time: Math.max(0, tf.time - offset) }))
 }
 
+// Approximate the crop X a neighboring smart-crop segment will produce at its
+// boundary — used as a stale-hold ease target in buildFFmpegExprFromSegments.
+// Mirrors cropEngine's edge-margin clamping but skips the full outlier-rejection
+// pipeline; good enough as a directional hint, not a precise keyframe value.
+// Returns undefined for split-screen neighbors (incompatible geometry) and when
+// no usable (non-center) face detection exists in the segment.
+function getNeighborCropX(
+  seg: VideoSegment | undefined,
+  dims: FrameDimensions,
+  which: 'first' | 'last'
+): number | undefined {
+  if (!seg || seg.type !== 'smart-crop') return undefined
+  const cropW = Math.floor(dims.height * 9 / 16)
+  const edgeMarginX = Math.floor(cropW * 0.08)
+  const maxX = dims.width - cropW
+  const usable = [...seg.timedFaces]
+    .filter(tf => tf.faces.length > 0 && tf.detectionType !== 'center')
+    .sort((a, b) => a.time - b.time)
+  const tf = which === 'first' ? usable[0] : usable[usable.length - 1]
+  if (!tf) return undefined
+  const rawX = Math.floor(tf.faces[0].centerX - cropW / 2)
+  return Math.max(edgeMarginX, Math.min(maxX - edgeMarginX, rawX))
+}
+
 // Render each segment to a temp file, then concatenate into the final output.
 export function renderVideoWithSegments(
   inputPath: string,
@@ -227,7 +251,9 @@ export function renderVideoWithSegments(
   for (let i = 0; i < segments.length; i++) {
     const segOut = path.join(TMP_DIR, `${jobId}_seg${i}.mp4`)
     console.log(`[render] segment ${i + 1}/${segments.length} (${segments[i].type}) ${segments[i].start.toFixed(1)}s→${segments[i].end.toFixed(1)}s`)
-    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts, lastValidSplitParams)
+    const nextSegFirstX = getNeighborCropX(segments[i + 1], dims, 'first')
+    const prevSegLastX  = getNeighborCropX(segments[i - 1], dims, 'last')
+    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts, lastValidSplitParams, nextSegFirstX, prevSegLastX)
     console.log(`[render] segment ${i + 1}/${segments.length} done`)
     segPaths.push(segOut)
 
@@ -271,7 +297,9 @@ function renderSegment(
   jobId: string,
   manualKeyframes: ManualKeyframe[] = [],
   sceneCuts: number[] = [],
-  lastValidSplitParams: SplitScreenParams | null = null
+  lastValidSplitParams: SplitScreenParams | null = null,
+  nextSegmentFirstX?: number,
+  prevSegmentLastX?: number
 ): void {
   const duration = seg.end - seg.start
   const baseArgs = [
@@ -376,7 +404,7 @@ function renderSegment(
       .filter(mk => mk.t >= seg.start && mk.t <= seg.end)
       .map(mk => ({ ...mk, t: mk.t - seg.start }))
     const vf = localFaces.length > 1
-      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts, duration)
+      ? buildDynamicSmartCropFilter(localFaces, dims, localManualKF, localCuts, duration, nextSegmentFirstX, prevSegmentLastX)
       : buildSmartCropFilter(computeSmartCrop(localFaces[0]?.faces[0] ?? null, dims))
 
     execFileSync(ffmpeg, [
