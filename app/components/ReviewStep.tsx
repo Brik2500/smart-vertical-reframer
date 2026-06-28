@@ -138,8 +138,6 @@ function FrameCard({
   cropX,
   cropX2,
   splitScreen,
-  prevCropX,
-  nextCropX,
   onChange,
   onChange2,
   onToggleSplit,
@@ -149,8 +147,6 @@ function FrameCard({
   cropX: number
   cropX2: number
   splitScreen: boolean
-  prevCropX?: number
-  nextCropX?: number
   onChange: (x: number) => void
   onChange2: (x: number) => void
   onToggleSplit: () => void
@@ -165,13 +161,6 @@ function FrameCard({
   const displaySplitW = Math.min(DISPLAY_W, splitStripW * scale)
 
   const isModified = !splitScreen && Math.abs(cropX - frame.cropX) > 2
-
-  // Jump warning: flag when this frame's crop is far from a neighbor's.
-  // Threshold: 25% of frame width (≈480px on 1920-wide footage).
-  const JUMP_THRESHOLD = frame.frameW * 0.25
-  const jumpFromPrev = !splitScreen && prevCropX !== undefined && Math.abs(cropX - prevCropX) > JUMP_THRESHOLD
-  const jumpToNext  = !splitScreen && nextCropX !== undefined && Math.abs(cropX - nextCropX) > JUMP_THRESHOLD
-  const hasJump = jumpFromPrev || jumpToNext
 
   // Shared drag state for single-crop mode
   const isDragging = useRef(false)
@@ -296,18 +285,11 @@ function FrameCard({
         </span>
       </div>
 
-      {/* Jump warning — live, updates as neighbors are adjusted */}
-      {hasJump && (
-        <div className="flex items-center gap-1 px-0.5">
-          <span className="text-amber-400 text-[10px]">⚠</span>
-          <span className="text-[10px] text-amber-400">
-            {jumpFromPrev && jumpToNext
-              ? 'big jump from previous and to next frame'
-              : jumpFromPrev
-              ? 'big jump from previous frame'
-              : 'big jump to next frame'}
-          </span>
-        </div>
+      {/* Dialogue — shown when Whisper transcript is available */}
+      {frame.dialogue && (
+        <p className="px-0.5 text-[10px] text-zinc-400 leading-relaxed italic line-clamp-2">
+          "{frame.dialogue}"
+        </p>
       )}
     </div>
   )
@@ -363,7 +345,7 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        {frames.map((f, i) => (
+        {frames.map(f => (
           <FrameCard
             key={f.time}
             frame={f}
@@ -371,8 +353,6 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
             cropX={cropPositions[f.time]}
             cropX2={cropPositions2[f.time]}
             splitScreen={splitModes[f.time] ?? false}
-            prevCropX={i > 0 ? cropPositions[frames[i - 1].time] : undefined}
-            nextCropX={i < frames.length - 1 ? cropPositions[frames[i + 1].time] : undefined}
             onChange={x => setCropPositions(prev => ({ ...prev, [f.time]: x }))}
             onChange2={x => setCropPositions2(prev => ({ ...prev, [f.time]: x }))}
             onToggleSplit={() => setSplitModes(prev => ({ ...prev, [f.time]: !prev[f.time] }))}

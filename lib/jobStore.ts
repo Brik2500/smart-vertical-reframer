@@ -11,6 +11,7 @@ export interface SampledFrame {
   cropW: number
   detectionType: DetectionType
   faceCount: number      // how many faces detected in this frame
+  dialogue?: string      // nearest Whisper transcript line at this timestamp
 }
 
 export interface Job {

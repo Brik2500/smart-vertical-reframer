@@ -5,6 +5,7 @@ import { classifySegments, renderVideoWithSegments, VideoSegment } from './segme
 import { SplitScreenParams } from './splitScreenEngine'
 import { computeSmartCrop } from './cropEngine'
 import { detectSceneCuts } from './sceneDetection'
+import { transcribeVideo, findDialogueAtTime } from './transcriptionEngine'
 import type { SampledFrame } from './jobStore'
 import type { ManualKeyframe } from './cropEngine'
 
@@ -28,7 +29,11 @@ export async function detectVideo(
   const POST_CUT = 0.75
   const cutAdjacent = sceneCuts.flatMap(c => [c - PRE_CUT, c + POST_CUT])
 
-  const { timedFaces, dims } = await detectFacesOverTime(inputPath, jobId, 30, cutAdjacent)
+  // Run face detection and Whisper transcription in parallel — independent operations.
+  const [{ timedFaces, dims }, transcriptSegments] = await Promise.all([
+    detectFacesOverTime(inputPath, jobId, 30, cutAdjacent),
+    transcribeVideo(inputPath, jobId),
+  ])
 
   const sampledFrames: SampledFrame[] = timedFaces.map(tf => {
     const face = tf.faces[0] ?? null
@@ -43,6 +48,7 @@ export async function detectVideo(
       cropW: crop.width,
       detectionType: tf.detectionType,
       faceCount: tf.faces.length,
+      dialogue: findDialogueAtTime(transcriptSegments, tf.time),
     }
   })
 
