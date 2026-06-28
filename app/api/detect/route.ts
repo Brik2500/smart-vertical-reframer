@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getJob, updateJob } from '@/lib/jobStore'
 import { detectVideo } from '@/lib/exportEngine'
+import { logEvent } from '@/lib/analytics'
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,10 +12,12 @@ export async function POST(req: NextRequest) {
     if (job.status !== 'pending') return NextResponse.json({ error: 'Job already started' }, { status: 400 })
 
     updateJob(jobId, { status: 'detecting' })
+    logEvent({ event: 'detect_started', jobId, projectType: job.projectType, mode: job.mode })
 
     detectVideo(jobId, job.inputPath)
       .then(({ timedFaces, dims, sampledFrames, sceneCuts }) => {
         updateJob(jobId, { status: 'review', timedFaces, dims, sampledFrames, sceneCuts })
+        logEvent({ event: 'detect_completed', jobId, frameCount: sampledFrames.length, sceneCutCount: sceneCuts.length })
       })
       .catch(err => {
         console.error('[detect]', err)

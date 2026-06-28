@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getJob } from '@/lib/jobStore'
+import { logEvent } from '@/lib/analytics'
 import fs from 'fs'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -14,6 +15,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'Output file missing' }, { status: 404 })
   }
 
+  logEvent({ event: 'download_clicked', jobId: id })
   const buffer = fs.readFileSync(job.outputPath)
 
   return new NextResponse(buffer, {

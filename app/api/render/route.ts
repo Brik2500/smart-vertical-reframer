@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getJob, updateJob } from '@/lib/jobStore'
 import { renderVideo, ReframingMode, SplitOverride } from '@/lib/exportEngine'
 import { saveCorrections } from '@/lib/correctionsStore'
+import { notifyRenderSuccess, notifyRenderFailure } from '@/lib/slackNotifier'
+import { userFacingError, classifyError } from '@/lib/errorClassifier'
+import { getVideoDuration } from '@/lib/faceDetection'
+import { logEvent } from '@/lib/analytics'
 import type { SampledFrame } from '@/lib/jobStore'
 
 interface Override {
@@ -73,11 +77,42 @@ export async function POST(req: NextRequest) {
     const splitOverrides: SplitOverride[] = overrides
       .filter(o => o.splitScreen)
       .map(o => ({ time: o.time, cropX: o.cropX, cropX2: o.cropX2 ?? o.cropX }))
+    const renderStart = Date.now()
+    const videoDuration = getVideoDuration(job.inputPath)
+    const correctionCount = adjusted.length
+
+    logEvent({
+      event: 'render_started',
+      jobId,
+      correctionCount,
+      splitCount: splitOverrides.length,
+      mode: job.mode,
+      projectType: job.projectType,
+      durationSecs: Math.round(videoDuration),
+    })
+
     renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides, job.sceneCuts ?? [])
-      .then(outputPath => updateJob(jobId, { status: 'done', outputPath }))
+      .then(outputPath => {
+        const renderTimeSecs = (Date.now() - renderStart) / 1000
+        updateJob(jobId, { status: 'done', outputPath })
+        logEvent({
+          event: 'render_completed',
+          jobId,
+          durationSecs: Math.round(videoDuration),
+          renderTimeSecs: Math.round(renderTimeSecs),
+          mode: job.mode,
+          projectType: job.projectType,
+          correctionCount,
+          splitCount: splitOverrides.length,
+        })
+        notifyRenderSuccess({ jobId, durationSecs: videoDuration, mode: job.mode, correctionCount, renderTimeSecs })
+      })
       .catch(err => {
         console.error('[render]', err)
-        updateJob(jobId, { status: 'error', error: String(err) })
+        const category = classifyError(err)
+        updateJob(jobId, { status: 'error', error: userFacingError(err) })
+        logEvent({ event: 'render_failed', jobId, durationSecs: Math.round(videoDuration), failureCategory: category })
+        notifyRenderFailure({ jobId, durationSecs: videoDuration, err })
       })
 
     return NextResponse.json({ status: 'rendering' })

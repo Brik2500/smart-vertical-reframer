@@ -21,6 +21,7 @@ export interface Job {
   outputPath?: string
   error?: string
   mode: string
+  projectType?: string
   createdAt: number
   // populated after detection
   sampledFrames?: SampledFrame[]
@@ -31,8 +32,8 @@ export interface Job {
 
 const jobs = new Map<string, Job>()
 
-export function createJob(id: string, inputPath: string, mode: string): Job {
-  const job: Job = { id, status: 'pending', inputPath, mode, createdAt: Date.now() }
+export function createJob(id: string, inputPath: string, mode: string, projectType?: string): Job {
+  const job: Job = { id, status: 'pending', inputPath, mode, projectType, createdAt: Date.now() }
   jobs.set(id, job)
   return job
 }
