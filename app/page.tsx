@@ -6,8 +6,25 @@ import type { SampledFrame } from '@/lib/jobStore'
 
 type Stage = 'idle' | 'uploading' | 'detecting' | 'reviewing' | 'rendering' | 'done' | 'error'
 
-const PROJECT_TYPES = ['Podcast', 'Interview', 'Documentary', 'Narrative', 'Other'] as const
+const PROJECT_TYPES = [
+  // Level 1 — works well, no warning
+  'Podcast', 'Interview', 'Documentary', 'Narrative',
+  // Level 2 — microjump warning
+  'Showreel / Highlight', 'Music Video / Trailer', 'Sports / Action',
+  // Level 3 — detection warning
+  'B-Roll / No Faces', 'Archive / Low Light',
+  // Catch-all
+  'Other',
+] as const
 type ProjectType = typeof PROJECT_TYPES[number]
+
+const PROJECT_TYPE_WARNINGS: Partial<Record<ProjectType, string>> = {
+  'Showreel / Highlight': 'Auto-reframing works best on continuous footage. Showreels and highlight packages cut faster than face-detection can track — expect microjumps at edit boundaries. Manual corrections in the review step will help.',
+  'Music Video / Trailer': 'Music videos and trailers cut faster than face-detection can track — expect microjumps at edit boundaries. Manual corrections in the review step will help.',
+  'Sports / Action': 'Fast cuts and small or occluded faces make automatic tracking unreliable. Expect microjumps and off-center framing — manual keyframes in the review step will improve results significantly.',
+  'B-Roll / No Faces': 'There are no faces to track in this content type by design — the detector will fall back to objects or center framing, which may not capture the most important content. Manual keyframes in the review step are strongly recommended.',
+  'Archive / Low Light': 'Faces exist but may be too degraded, grainy, or underlit for reliable detection — expect more fallbacks to object or center framing than usual. Review crops carefully before rendering.',
+}
 
 const ALLOWED_MIME = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm']
 const MAX_SIZE_MB = 200
@@ -297,6 +314,11 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
+                {projectType && PROJECT_TYPE_WARNINGS[projectType] && (
+                  <p className="text-xs text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 leading-relaxed">
+                    {PROJECT_TYPE_WARNINGS[projectType]}
+                  </p>
+                )}
               </div>
             )}
 
