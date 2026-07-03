@@ -219,6 +219,26 @@ function faceSharpness(
   return count > 0 ? sum / count : 0
 }
 
+// Remove near-duplicate bounding boxes caused by the same person being detected
+// twice (partial profile, motion blur, reflection). Called while faces are still
+// in sharpness-descending order so the sharper detection is always kept.
+function deduplicateFaces(faces: FaceBox[], t: number, distThreshold = 200): FaceBox[] {
+  const kept: FaceBox[] = []
+  for (const face of faces) {
+    const near = kept.find(k => Math.abs(k.centerX - face.centerX) < distThreshold)
+    if (near) {
+      console.log(
+        `[detect] deduped t=${t.toFixed(2)}s: ` +
+        `merged cx=${Math.round(face.centerX)}+${Math.round(near.centerX)} → ` +
+        `kept cx=${Math.round(near.centerX)} (higher sharpness)`
+      )
+    } else {
+      kept.push(face)
+    }
+  }
+  return kept
+}
+
 interface RawDetection {
   score: number
   box: { x: number; y: number; width: number; height: number }
@@ -350,7 +370,9 @@ export async function detectFacesOverTime(
     const framePath = path.join(frameDir, `frame_t${t.toFixed(2).replace('.', '_')}.jpg`)
     try {
       extractFrameAt(videoPath, t, framePath)
-      const { faces, type, rawDetections } = await detectFacesInFrame(framePath)
+      const { faces: detectedFaces, type, rawDetections } = await detectFacesInFrame(framePath)
+      // Dedup while still in sharpness order (sharper detection wins), then re-sort by area.
+      const faces = deduplicateFaces(detectedFaces, t)
       faces.sort((a, b) => b.area - a.area)
       console.log(`[DEBUG] t=${t}s → ${faces.length} face(s) [${type}]`, faces.map(f =>
         `cx=${Math.round(f.centerX)} w=${Math.round(f.width)}`

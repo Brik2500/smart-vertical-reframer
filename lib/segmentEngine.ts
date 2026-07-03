@@ -67,9 +67,22 @@ export function classifySegments(
     const prev = labeled[i - 1]
     const curr = labeled[i]
 
-    if (curr.isTwoShot !== segType) {
-      // Type change — boundary is the midpoint between previous and current sample
-      const boundary = (prev.tf.time + curr.tf.time) / 2
+    // A scene cut between samples is always a hard boundary — even if the type vote
+    // didn't change, the two shots must not share a classification run. Using the cut
+    // timestamp (not the sample midpoint) as the boundary ensures post-cut content
+    // is never rendered with pre-cut crop positions.
+    const cutBetween = sceneCuts.find(c => c > prev.tf.time && c <= curr.tf.time)
+    const typeChanged = curr.isTwoShot !== segType
+
+    if (typeChanged || cutBetween !== undefined) {
+      const boundary = cutBetween ?? (prev.tf.time + curr.tf.time) / 2
+
+      console.log(
+        `[classify] seg ${segStartTime.toFixed(2)}→${boundary.toFixed(2)} ` +
+        `type=${segType ? 'SPLIT_SCREEN' : 'SMART_CROP'} ` +
+        `samples=${segSamples.length} ` +
+        `reason=${cutBetween !== undefined ? `cut@${cutBetween.toFixed(2)}` : 'type-change'}`
+      )
 
       segments.push({
         start: segStartTime,
@@ -186,6 +199,19 @@ function makeSubSegment(
       }
     }
   }
+
+  const votes = faces.map(tf => {
+    if (tf.faces.length < 2) return `t=${tf.time.toFixed(2)}:SMART_CROP(${tf.faces.length}face)`
+    const a = tf.faces[0], b = tf.faces[1]
+    const span = Math.max(a.x + a.width, b.x + b.width) - Math.min(a.x, b.x)
+    const qualifies = span > dims.width * 0.5
+    return `t=${tf.time.toFixed(2)}:${qualifies ? 'SPLIT_SCREEN' : 'SMART_CROP'}(span=${Math.round(span)})`
+  })
+  console.log(
+    `[classify] makeSubSeg ${from.toFixed(2)}→${to.toFixed(2)} ` +
+    `parent=${parent.type} samples=${faces.length} ` +
+    `result=${isTwoShot ? 'SPLIT_SCREEN' : 'SMART_CROP'} [${votes.join(' ')}]`
+  )
 
   return {
     start: from,
