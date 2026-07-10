@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
+import posthog from 'posthog-js'
 import { ReviewStep } from './components/ReviewStep'
 import type { SampledFrame } from '@/lib/jobStore'
 
@@ -140,6 +141,11 @@ export default function Home() {
       return
     }
     setFile(f)
+    posthog.capture('video_selected', {
+      file_size_mb: Math.round(f.size / 1024 / 1024),
+      file_type: f.type,
+      duration_secs: dur !== null ? Math.round(dur) : undefined,
+    })
   }, [])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -173,6 +179,10 @@ export default function Home() {
     if (!file) return
     setError(null)
     setStage('uploading')
+    posthog.capture('upload_started', {
+      file_size_mb: Math.round(file.size / 1024 / 1024),
+      project_type: projectType ?? null,
+    })
 
     try {
       const formData = new FormData()
@@ -247,6 +257,18 @@ export default function Home() {
           </p>
         </div>
 
+        {/* Demo video */}
+        <div style={{ padding: '56.25% 0 0 0', position: 'relative' }}>
+          <iframe
+            src="https://player.vimeo.com/video/1208874637?h=7ae70480ad&badge=0&autopause=0&player_id=0&app_id=58479"
+            frameBorder="0"
+            allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media; web-share"
+            referrerPolicy="strict-origin-when-cross-origin"
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+            title="VERTIFRAME PRODUCT DEMONSTRATION"
+          />
+        </div>
+
         {/* Upload UI — only show when idle/error */}
         {(stage === 'idle' || stage === 'error') && (
           <>
@@ -303,7 +325,11 @@ export default function Home() {
                   {PROJECT_TYPES.map(pt => (
                     <button
                       key={pt}
-                      onClick={() => setProjectType(pt === projectType ? null : pt)}
+                      onClick={() => {
+                        const next = pt === projectType ? null : pt
+                        setProjectType(next)
+                        if (next) posthog.capture('project_type_selected', { project_type: next })
+                      }}
                       className={`rounded-full px-3.5 py-1.5 text-sm font-medium border transition-colors ${
                         projectType === pt
                           ? 'border-indigo-500 bg-indigo-500/15 text-white'
@@ -446,7 +472,10 @@ export default function Home() {
                     Submit feedback
                   </button>
                   <button
-                    onClick={() => setSurveyDone(true)}
+                    onClick={() => {
+                      setSurveyDone(true)
+                      posthog.capture('survey_skipped')
+                    }}
                     className="px-4 py-2 rounded-lg text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
                   >
                     Skip
@@ -460,6 +489,7 @@ export default function Home() {
             <a
               href={`/api/download/${jobId}`}
               download
+              onClick={() => posthog.capture('video_downloaded', { job_id: jobId })}
               className="block w-full py-3.5 rounded-xl font-semibold text-sm bg-emerald-600 hover:bg-emerald-500 transition-colors text-center"
             >
               Download Video
