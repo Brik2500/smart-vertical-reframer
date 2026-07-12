@@ -245,7 +245,7 @@ function getNeighborCropX(
   const edgeMarginX = Math.floor(cropW * 0.08)
   const maxX = dims.width - cropW
   const usable = [...seg.timedFaces]
-    .filter(tf => tf.faces.length > 0 && tf.detectionType !== 'center')
+    .filter(tf => tf.faces.length > 0 && tf.detectionType !== 'center' && tf.detectionType !== 'saliency')
     .sort((a, b) => a.time - b.time)
   const tf = which === 'first' ? usable[0] : usable[usable.length - 1]
   if (!tf) return undefined
