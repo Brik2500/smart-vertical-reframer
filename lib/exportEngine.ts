@@ -28,10 +28,14 @@ export async function detectVideo(
   const PRE_CUT = 0.2
   const POST_CUT = 0.75
   const cutAdjacent = sceneCuts.flatMap(c => [c - PRE_CUT, c + POST_CUT])
+  // Always add an early sample near t=0 — the first base sample fires at
+  // duration/31, which can be 8+ seconds in for long videos, leaving the
+  // opening shot with no detection data for the pre-roll fallback.
+  const extraTimestamps = [0.75, ...cutAdjacent]
 
   // Run face detection and Whisper transcription in parallel — independent operations.
   const [{ timedFaces, dims }, transcriptSegments] = await Promise.all([
-    detectFacesOverTime(inputPath, jobId, 30, cutAdjacent),
+    detectFacesOverTime(inputPath, jobId, 30, extraTimestamps),
     transcribeVideo(inputPath, jobId),
   ])
 
