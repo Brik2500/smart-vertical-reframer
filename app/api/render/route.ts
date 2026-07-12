@@ -57,22 +57,33 @@ export async function POST(req: NextRequest) {
 
     const sceneCuts = job.sceneCuts ?? []
 
-    const anchoredKeyframes = cropOverrides.map(o => {
-      // If this frame was manually adjusted, use it as-is.
-      if (adjusted.some(a => Math.abs(a.time - o.time) < 0.5)) return { t: o.time, x: o.cropX }
-      // If no adjustments were made at all, keep the AI suggestion.
-      if (adjusted.length === 0) return { t: o.time, x: o.cropX }
-      // Find the nearest adjusted frame.
-      const nearest = adjusted.reduce((best, a) =>
-        Math.abs(a.time - o.time) < Math.abs(best.time - o.time) ? a : best
-      )
-      // Don't propagate across a scene cut — that's a different shot.
-      const lo = Math.min(o.time, nearest.time)
-      const hi = Math.max(o.time, nearest.time)
-      const cutBetween = sceneCuts.some(cut => cut > lo && cut < hi)
-      if (cutBetween) return { t: o.time, x: o.cropX }
-      return { t: o.time, x: nearest.cropX }
-    })
+    const anchoredKeyframes = cropOverrides
+      .filter(o => {
+        // Always keep frames the director actually adjusted.
+        if (adjusted.some(a => Math.abs(a.time - o.time) < 0.5)) return true
+        // Drop unadjusted saliency/center frames — their x values are unreliable
+        // (saliency returns cx=frameCenter when detection fails, producing drift to
+        // x=frameCenterX near scene cuts). Letting them flow into manualKeyframes as
+        // confidence=1.0 entries bypasses the rawKF filter in buildDynamicSmartCropFilter.
+        const frame = job.sampledFrames?.find(f => Math.abs(f.time - o.time) < 0.5)
+        return frame?.detectionType !== 'saliency' && frame?.detectionType !== 'center'
+      })
+      .map(o => {
+        // If this frame was manually adjusted, use it as-is.
+        if (adjusted.some(a => Math.abs(a.time - o.time) < 0.5)) return { t: o.time, x: o.cropX }
+        // If no adjustments were made at all, keep the AI suggestion.
+        if (adjusted.length === 0) return { t: o.time, x: o.cropX }
+        // Find the nearest adjusted frame.
+        const nearest = adjusted.reduce((best, a) =>
+          Math.abs(a.time - o.time) < Math.abs(best.time - o.time) ? a : best
+        )
+        // Don't propagate across a scene cut — that's a different shot.
+        const lo = Math.min(o.time, nearest.time)
+        const hi = Math.max(o.time, nearest.time)
+        const cutBetween = sceneCuts.some(cut => cut > lo && cut < hi)
+        if (cutBetween) return { t: o.time, x: o.cropX }
+        return { t: o.time, x: nearest.cropX }
+      })
 
     const splitOverrides: SplitOverride[] = overrides
       .filter(o => o.splitScreen)
