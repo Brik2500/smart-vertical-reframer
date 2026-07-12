@@ -70,7 +70,7 @@ export function buildDynamicSmartCropFilter(
   const sortedFaces = [...timedFaces].sort((a, b) => a.time - b.time)
 
   for (const tf of sortedFaces) {
-    if (tf.detectionType === 'center') continue
+    if (tf.detectionType === 'center' || tf.detectionType === 'saliency') continue
     const face = tf.faces[0] ?? null
     if (!face) continue
 
