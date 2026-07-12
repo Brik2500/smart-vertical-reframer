@@ -260,6 +260,12 @@ export function buildStabilizedSegments(
 // content where 0.8s of stale hold is still too long.
 const STALE_HOLD_THRESHOLD = 0.8
 
+// If a pan segment's implied speed exceeds this (px/s), it almost certainly
+// reflects a scene jump or a false detection rather than real subject motion.
+// At 300px/s a 2s window pans 600px — visibly jarring. Hold at the entry
+// position and let the next cut boundary snap to the new position.
+const MAX_PAN_SPEED_PX_PER_SEC = 300
+
 export function buildFFmpegExprFromSegments(
   segments: ClassifiedSegment[],
   maxX: number,
@@ -324,10 +330,23 @@ export function buildFFmpegExprFromSegments(
       segExpr = `if(lt(t,${snapAt}),${seg.fromX},${seg.toX})`;
     } else {
       const dt = seg.toT - seg.fromT;
-      const norm = `((t-${seg.fromT})/${dt.toFixed(4)})`;
-      const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
-      const eased = `(${seg.fromX}+(${seg.toX - seg.fromX})*${smooth})`;
-      segExpr = `max(0,min(${maxX},${eased}))`;
+      const dx = Math.abs(seg.toX - seg.fromX);
+      const speed = dt > 1e-6 ? dx / dt : Infinity;
+
+      if (speed > MAX_PAN_SPEED_PX_PER_SEC) {
+        // Velocity too high to be real subject motion — hold at entry position.
+        // The position snap will happen at the next scene cut boundary.
+        console.log(
+          `[crop] fast-pan guard: ${dx.toFixed(0)}px / ${dt.toFixed(2)}s = ${speed.toFixed(0)}px/s ` +
+          `> ${MAX_PAN_SPEED_PX_PER_SEC}px/s limit — holding at x=${seg.fromX}`
+        )
+        segExpr = String(seg.fromX);
+      } else {
+        const norm = `((t-${seg.fromT})/${dt.toFixed(4)})`;
+        const smooth = `(${norm}*${norm}*(3.0-2.0*${norm}))`;
+        const eased = `(${seg.fromX}+(${seg.toX - seg.fromX})*${smooth})`;
+        segExpr = `max(0,min(${maxX},${eased}))`;
+      }
     }
 
     expr = `if(between(t,${seg.fromT},${seg.toT}),${segExpr},${expr})`;
