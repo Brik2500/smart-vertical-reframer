@@ -9,10 +9,28 @@ import { TMP_DIR } from './videoUpload'
 export interface VideoSegment {
   start: number               // seconds into source video
   end: number
-  type: 'smart-crop' | 'split-screen'
+  type: 'smart-crop' | 'split-screen' | 'context'
   timedFaces: TimedFace[]     // samples that fall in this segment (global timestamps)
   splitFaces?: [FaceBox, FaceBox]
   manualSplitParams?: SplitScreenParams  // set when user manually positioned both boxes
+}
+
+// Confidence score 0–1 for a set of detection samples.
+// face=1.0, object=0.7, saliency=0.3, center=0.0
+// A segment scoring below CONTEXT_THRESHOLD triggers the three-panel context layout.
+const CONTEXT_THRESHOLD = 0.35
+
+function segmentConfidence(samples: TimedFace[]): number {
+  if (samples.length === 0) return 0
+  const scores: number[] = samples.map(tf => {
+    switch (tf.detectionType) {
+      case 'face':     return 1.0
+      case 'object':   return 0.7
+      case 'saliency': return 0.3
+      default:         return 0.0  // 'center'
+    }
+  })
+  return scores.reduce((a, b) => a + b, 0) / scores.length
 }
 
 function ffmpegBin(): string {
@@ -110,6 +128,18 @@ export function classifySegments(
     timedFaces: segSamples,
     splitFaces: segSplitFaces,
   })
+
+  // Confidence pass: downgrade low-confidence smart-crop segments to context layout.
+  // Split-screen segments are never downgraded — two detected faces is already
+  // meaningful signal; the context layout would add no value there.
+  for (const seg of segments) {
+    if (seg.type !== 'smart-crop') continue
+    const conf = segmentConfidence(seg.timedFaces)
+    if (conf < CONTEXT_THRESHOLD) {
+      console.log(`[classify] context-layout trigger: ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} conf=${conf.toFixed(2)} < ${CONTEXT_THRESHOLD}`)
+      seg.type = 'context'
+    }
+  }
 
   // Split any segment that spans an internal scene cut.
   // classifySegments boundaries are detection-sample midpoints, independent of cuts,
@@ -213,10 +243,20 @@ function makeSubSegment(
     `result=${isTwoShot ? 'SPLIT_SCREEN' : 'SMART_CROP'} [${votes.join(' ')}]`
   )
 
+  const baseType = isTwoShot ? 'split-screen' : 'smart-crop'
+  const conf = segmentConfidence(faces)
+  const type: VideoSegment['type'] = (baseType === 'smart-crop' && conf < CONTEXT_THRESHOLD)
+    ? 'context'
+    : baseType
+
+  if (type === 'context') {
+    console.log(`[classify] makeSubSeg context-layout: ${from.toFixed(2)}→${to.toFixed(2)} conf=${conf.toFixed(2)}`)
+  }
+
   return {
     start: from,
     end: to,
-    type: isTwoShot ? 'split-screen' : 'smart-crop',
+    type,
     timedFaces: faces,
     splitFaces,
     manualSplitParams: isTwoShot ? parent.manualSplitParams : undefined,
@@ -312,6 +352,38 @@ export function renderVideoWithSegments(
     outputPath, '-y',
   ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
   console.log(`[render] concat done — output ready`)
+}
+
+// Build an FFmpeg filter_complex for the three-panel context layout.
+// Output: 1080x1920 (9:16)
+//   Top    1080x640 — subject crop (best available face, or centered fallback)
+//   Middle 1080x640 — original wide frame letterboxed (never cropped)
+//   Bottom 1080x640 — same crop as top (single-subject footage) or second subject
+//
+// Panel aspect: 1080/640 = 1.6875 ≈ 16:9.6 — close enough to 16:9 that the
+// letterboxed wide panel reads naturally without visible distortion.
+function buildContextFilter(dims: FrameDimensions, cropX: number, cropX2?: number): string {
+  // Crop width for top/bottom panels: full source height mapped to 1080x640 output.
+  // source_height * (out_w / out_h) = 1080 * (1080/640) = 1822.5 → floor to even.
+  const panelOutW = 1080
+  const panelOutH = 640
+  const cropW = Math.floor(dims.height * (panelOutW / panelOutH) / 2) * 2  // keep even
+  const clampX = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
+
+  const topX = clampX(cropX)
+  const botX = clampX(cropX2 ?? cropX)
+
+  // Middle panel: scale full source to fit 1080w, letterbox to 640h.
+  const midH = Math.floor(dims.height * (panelOutW / dims.width) / 2) * 2
+  const padTop = Math.floor((panelOutH - midH) / 2)
+
+  return [
+    `[0:v]split=3[top_src][mid_src][bot_src]`,
+    `[top_src]crop=${cropW}:${dims.height}:${topX}:0,scale=${panelOutW}:${panelOutH}[top]`,
+    `[mid_src]scale=${panelOutW}:${midH},pad=${panelOutW}:${panelOutH}:0:${padTop}:black[mid]`,
+    `[bot_src]crop=${cropW}:${dims.height}:${botX}:0,scale=${panelOutW}:${panelOutH}[bot]`,
+    `[top][mid][bot]vstack=inputs=3[out]`,
+  ].join(';')
 }
 
 function renderSegment(
@@ -415,6 +487,37 @@ function renderSegment(
       '-c:a', 'aac',
       outputPath, '-y',
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
+  } else if (seg.type === 'context') {
+    // Three-panel context layout: static crop positions derived from best available
+    // face detection in the segment. No dynamic tracking — the wide center panel
+    // provides stability so the viewer never notices the tracking uncertainty.
+    const usable = seg.timedFaces
+      .filter(tf => tf.faces.length > 0 && tf.detectionType === 'face')
+      .sort((a, b) => b.faces[0].area - a.faces[0].area)
+
+    const cropW = Math.floor(dims.height * (1080 / 640) / 2) * 2
+    const centerX = Math.floor((dims.width - cropW) / 2)
+
+    const face1 = usable[0]?.faces[0] ?? null
+    const face2 = usable[0]?.faces[1] ?? usable[1]?.faces[0] ?? null
+
+    const rawX1 = face1 ? Math.floor(face1.centerX - cropW / 2) : centerX
+    const rawX2 = face2 ? Math.floor(face2.centerX - cropW / 2) : rawX1
+
+    const filterComplex = buildContextFilter(dims, rawX1, rawX2)
+    console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} topX=${rawX1} botX=${rawX2}`)
+
+    execFileSync(ffmpeg, [
+      '-loglevel', 'error',
+      ...baseArgs,
+      '-filter_complex', filterComplex,
+      '-map', '[out]',
+      '-map', '0:a?',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+      '-c:a', 'aac',
+      outputPath, '-y',
+    ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
+
   } else {
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
     // Offset scene cut timestamps to local segment time (t=0 at seg.start).
