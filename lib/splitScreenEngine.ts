@@ -169,11 +169,13 @@ export function buildDynamicSplitScreenFilter(
     }
   }
 
-  // Use previous segment's ending position as pre-roll fallback when available.
-  // This prevents the hold expression from snapping to a face-derived initial
-  // position at t=0 when the previous segment ended at a different X.
-  const topFallback = prevEndTopX ?? initialParams.top.x
-  const botFallback = prevEndBotX ?? initialParams.bottom.x
+  // Pre-roll fallback: use the previous segment's ending X when available (prevents
+  // inter-segment jump). When there's no prior segment, seed from the first resolved
+  // keyframe rather than the static initialParams — the dynamic resolver's first
+  // assignment is authoritative; using a face-derived static estimate causes a visible
+  // jump at the moment the first detection fires.
+  const topFallback = prevEndTopX ?? (topKF.length > 0 ? topKF[0].x : initialParams.top.x)
+  const botFallback = prevEndBotX ?? (bottomKF.length > 0 ? bottomKF[0].x : initialParams.bottom.x)
 
   const topXExpr    = buildHoldExpr(topKF,    topFallback)
   const bottomXExpr = buildHoldExpr(bottomKF, botFallback)
