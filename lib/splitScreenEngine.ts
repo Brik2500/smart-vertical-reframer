@@ -74,12 +74,20 @@ type SplitSampleRecord = {
   botX: number; botCx: number; botFaceIdx: number | null;
 }
 
+export interface DynamicSplitResult {
+  filter: string
+  endTopX: number    // final top-pane X at segment end — seed for next segment
+  endBotX: number
+}
+
 export function buildDynamicSplitScreenFilter(
   timedFaces: TimedFace[],
   dims: FrameDimensions,
   initialParams: SplitScreenParams,
-  segmentDuration?: number   // used only for dense end-of-segment logging
-): string {
+  segmentDuration?: number,   // used only for dense end-of-segment logging
+  prevEndTopX?: number,       // ending top X of prior segment — prevents pre-roll jump
+  prevEndBotX?: number        // ending bottom X of prior segment
+): DynamicSplitResult {
   const stripW = Math.floor(dims.height * 9 / 8)
   const maxX   = dims.width - stripW
 
@@ -161,14 +169,25 @@ export function buildDynamicSplitScreenFilter(
     }
   }
 
-  const topX    = buildHoldExpr(topKF,    initialParams.top.x)
-  const bottomX = buildHoldExpr(bottomKF, initialParams.bottom.x)
+  // Use previous segment's ending position as pre-roll fallback when available.
+  // This prevents the hold expression from snapping to a face-derived initial
+  // position at t=0 when the previous segment ended at a different X.
+  const topFallback = prevEndTopX ?? initialParams.top.x
+  const botFallback = prevEndBotX ?? initialParams.bottom.x
 
-  return (
-    `[0:v]crop=${stripW}:${dims.height}:'${topX}':0,scale=540:480:flags=lanczos[top];` +
-    `[0:v]crop=${stripW}:${dims.height}:'${bottomX}':0,scale=540:480:flags=lanczos[bottom];` +
+  const topXExpr    = buildHoldExpr(topKF,    topFallback)
+  const bottomXExpr = buildHoldExpr(bottomKF, botFallback)
+
+  const endTopX = topKF.length > 0    ? topKF[topKF.length - 1].x       : topFallback
+  const endBotX = bottomKF.length > 0 ? bottomKF[bottomKF.length - 1].x : botFallback
+
+  const filter = (
+    `[0:v]crop=${stripW}:${dims.height}:'${topXExpr}':0,scale=540:480:flags=lanczos[top];` +
+    `[0:v]crop=${stripW}:${dims.height}:'${bottomXExpr}':0,scale=540:480:flags=lanczos[bottom];` +
     `[top][bottom]vstack=inputs=2[out]`
   )
+
+  return { filter, endTopX, endBotX }
 }
 
 // Hold-and-snap expression: hold each keyframe's x until the next sample arrives.

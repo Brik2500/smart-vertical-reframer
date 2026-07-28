@@ -3,7 +3,7 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import { TimedFace, FaceBox, FrameDimensions } from './faceDetection'
 import { buildDynamicSmartCropFilter, buildSmartCropFilter, computeSmartCrop, ManualKeyframe } from './cropEngine'
-import { buildSplitScreenFilter, buildDynamicSplitScreenFilter, computeSplitScreen, SplitScreenParams } from './splitScreenEngine'
+import { buildSplitScreenFilter, buildDynamicSplitScreenFilter, computeSplitScreen, SplitScreenParams, DynamicSplitResult } from './splitScreenEngine'
 import { TMP_DIR } from './videoUpload'
 
 export interface VideoSegment {
@@ -307,25 +307,38 @@ export function renderVideoWithSegments(
 
   if (segments.length === 1) {
     console.log(`[render] single segment — starting FFmpeg render`)
-    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes, sceneCuts, null)
+    renderSegment(ffmpeg, inputPath, segments[0], dims, outputPath, jobId, manualKeyframes, sceneCuts, null, undefined, undefined, undefined, undefined)
     console.log(`[render] FFmpeg render complete`)
     return
   }
 
   const segPaths: string[] = []
   let lastValidSplitParams: SplitScreenParams | null = null
+  // Track the actual rendered ending X of the previous split-screen segment so the
+  // next segment's pre-roll fallback starts from where the last frame actually was,
+  // not from a face-derived initial position that can differ by tens of pixels.
+  let prevSplitEndTopX: number | undefined
+  let prevSplitEndBotX: number | undefined
+
   for (let i = 0; i < segments.length; i++) {
     const segOut = path.join(TMP_DIR, `${jobId}_seg${i}.mp4`)
     console.log(`[render] segment ${i + 1}/${segments.length} (${segments[i].type}) ${segments[i].start.toFixed(1)}s→${segments[i].end.toFixed(1)}s`)
     const nextSegFirstX = getNeighborCropX(segments[i + 1], dims, 'first')
     const prevSegLastX  = getNeighborCropX(segments[i - 1], dims, 'last')
-    renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts, lastValidSplitParams, nextSegFirstX, prevSegLastX)
+    const splitResult = renderSegment(ffmpeg, inputPath, segments[i], dims, segOut, jobId, manualKeyframes, sceneCuts, lastValidSplitParams, nextSegFirstX, prevSegLastX, prevSplitEndTopX, prevSplitEndBotX)
     console.log(`[render] segment ${i + 1}/${segments.length} done`)
     segPaths.push(segOut)
 
+    if (splitResult) {
+      prevSplitEndTopX = splitResult.endTopX
+      prevSplitEndBotX = splitResult.endBotX
+    } else if (segments[i].type !== 'split-screen') {
+      // Non-split segment breaks the chain — next split starts fresh
+      prevSplitEndTopX = undefined
+      prevSplitEndBotX = undefined
+    }
+
     // Advance the fallback pointer only on genuinely distinct pane positions.
-    // Uses the segment's own original params (not effectiveSplitParams) so a bailed-out
-    // degenerate segment never poisons the pointer for subsequent segments.
     const seg = segments[i]
     if (seg.type === 'split-screen') {
       const sp = seg.manualSplitParams
@@ -397,8 +410,10 @@ function renderSegment(
   sceneCuts: number[] = [],
   lastValidSplitParams: SplitScreenParams | null = null,
   nextSegmentFirstX?: number,
-  prevSegmentLastX?: number
-): void {
+  prevSegmentLastX?: number,
+  prevSplitEndTopX?: number,
+  prevSplitEndBotX?: number
+): DynamicSplitResult | null {
   const duration = seg.end - seg.start
   const baseArgs = [
     '-ss', String(seg.start),
@@ -473,8 +488,9 @@ function renderSegment(
       }
     }
 
+    let dynamicResult: DynamicSplitResult | null = null
     const filterComplex = localFaces.length >= 2
-      ? buildDynamicSplitScreenFilter(localFaces, dims, effectiveSplitParams, duration)
+      ? (dynamicResult = buildDynamicSplitScreenFilter(localFaces, dims, effectiveSplitParams, duration, prevSplitEndTopX, prevSplitEndBotX)).filter
       : buildSplitScreenFilter(effectiveSplitParams)
 
     execFileSync(ffmpeg, [
@@ -487,6 +503,7 @@ function renderSegment(
       '-c:a', 'aac',
       outputPath, '-y',
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
+    return dynamicResult
   } else if (seg.type === 'context') {
     // Three-panel context layout: static crop positions derived from best available
     // face detection in the segment. No dynamic tracking — the wide center panel
@@ -517,6 +534,7 @@ function renderSegment(
       '-c:a', 'aac',
       outputPath, '-y',
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
+    return null
 
   } else {
     const localFaces = offsetFaces(seg.timedFaces, seg.start)
@@ -556,5 +574,6 @@ function renderSegment(
       '-c:a', 'aac',
       outputPath, '-y',
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
+    return null
   }
 }
