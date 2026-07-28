@@ -104,6 +104,12 @@ export function buildDynamicSplitScreenFilter(
   const topKF:    Array<{ t: number; x: number }> = []
   const bottomKF: Array<{ t: number; x: number }> = []
 
+  // Suppress keyframe updates smaller than this in source pixels.
+  // Faces hovering near the clamp boundary (cx ≈ stripW/2) produce alternating
+  // 0/N values each sample — 3-output-pixel oscillations that look like jitter.
+  // 15 source px ≈ 0.8% of frame width; well below any intentional reframe.
+  const MIN_CROP_DELTA = 15
+
   // Sort by time — bracket samples arrive out of order relative to base grid.
   const sorted = [...timedFaces].sort((a, b) => a.time - b.time)
 
@@ -116,8 +122,14 @@ export function buildDynamicSplitScreenFilter(
 
     const topX = toX(resolved.top.cx)
     const botX = toX(resolved.bottom.cx)
-    topKF.push(    { t: tf.time, x: topX })
-    bottomKF.push( { t: tf.time, x: botX })
+    const lastTopX = topKF.length > 0 ? topKF[topKF.length - 1].x : -MIN_CROP_DELTA
+    const lastBotX = bottomKF.length > 0 ? bottomKF[bottomKF.length - 1].x : -MIN_CROP_DELTA
+    if (topKF.length === 0 || Math.abs(topX - lastTopX) >= MIN_CROP_DELTA) {
+      topKF.push({ t: tf.time, x: topX })
+    }
+    if (bottomKF.length === 0 || Math.abs(botX - lastBotX) >= MIN_CROP_DELTA) {
+      bottomKF.push({ t: tf.time, x: botX })
+    }
 
     // Infer which detected face index went to each pane (for logging only).
     let topFaceIdx: number | null = null
