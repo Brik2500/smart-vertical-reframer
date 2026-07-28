@@ -155,6 +155,7 @@ export function buildDynamicSplitScreenFilter(
   }
 
   console.log(`[split] samples (${sorted.length}): ${sampleLog.join(' | ')}`)
+  console.log(`[split] emitted KFs — top: [${topKF.map(k => `t=${k.t.toFixed(2)} x=${k.x}`).join(', ')}] bot: [${bottomKF.map(k => `t=${k.t.toFixed(2)} x=${k.x}`).join(', ')}]`)
 
   // Dense end-of-segment logging: 0.1s ticks in the last 1s.
   // Evaluates the hold expression at each tick by looking up the active sample
@@ -196,8 +197,9 @@ export function buildDynamicSplitScreenFilter(
   const endBotX = bottomKF.length > 0 ? bottomKF[bottomKF.length - 1].x : botFallback
 
   const filter = (
-    `[0:v]crop=${stripW}:${dims.height}:'${topXExpr}':0,scale=540:480:flags=lanczos[top];` +
-    `[0:v]crop=${stripW}:${dims.height}:'${bottomXExpr}':0,scale=540:480:flags=lanczos[bottom];` +
+    `[0:v]split=2[a][b];` +
+    `[a]crop=${stripW}:${dims.height}:'${topXExpr}':0,scale=540:480:flags=lanczos[top];` +
+    `[b]crop=${stripW}:${dims.height}:'${bottomXExpr}':0,scale=540:480:flags=lanczos[bottom];` +
     `[top][bottom]vstack=inputs=2[out]`
   )
 
