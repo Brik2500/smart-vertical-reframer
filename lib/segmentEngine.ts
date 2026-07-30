@@ -597,24 +597,46 @@ function renderSegment(
     ], { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
     return dynamicResult
   } else if (seg.type === 'context') {
-    // Three-panel context layout: static crop positions derived from best available
-    // face detection in the segment. No dynamic tracking — the wide center panel
-    // provides stability so the viewer never notices the tracking uncertainty.
-    const usable = seg.timedFaces
-      .filter(tf => tf.faces.length > 0 && tf.detectionType === 'face')
-      .sort((a, b) => b.faces[0].area - a.faces[0].area)
-
+    // Three-panel layout: top = face A crop, middle = original frame, bottom = face B crop.
+    // Panel aspect ratio is 1080×640 (27:16), so each crop strip is wider than a 9:16 crop.
     const cropW = Math.floor(dims.height * (1080 / 640) / 2) * 2
-    const centerX = Math.floor((dims.width - cropW) / 2)
+    const clamp = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
+    const centerX = clamp(Math.floor((dims.width - cropW) / 2))
 
-    const face1 = usable[0]?.faces[0] ?? null
-    const face2 = usable[0]?.faces[1] ?? usable[1]?.faces[0] ?? null
+    let topX: number
+    let botX: number
 
-    const rawX1 = face1 ? Math.floor(face1.centerX - cropW / 2) : centerX
-    const rawX2 = face2 ? Math.floor(face2.centerX - cropW / 2) : rawX1
+    if (seg.splitFaces && seg.splitFaces[0] && seg.splitFaces[1]
+        && Math.abs(seg.splitFaces[0].centerX - seg.splitFaces[1].centerX) > 50) {
+      // Two distinct faces already identified by the split-screen classifier.
+      // Sort by centerX so left subject is always top panel, right is always bottom.
+      // This keeps each person in the same panel for the entire segment.
+      const [fA, fB] = [...seg.splitFaces].sort((a, b) => a.centerX - b.centerX)
+      topX = clamp(Math.floor(fA.centerX - cropW / 2))
+      botX = clamp(Math.floor(fB.centerX - cropW / 2))
+      console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} using splitFaces topX=${topX} (cx=${Math.round(fA.centerX)}) botX=${botX} (cx=${Math.round(fB.centerX)})`)
+    } else {
+      // Fall back: cluster all face detections in the segment into left and right groups.
+      // Average each cluster's centerX to find the two persistent subject positions.
+      const allFaces = seg.timedFaces
+        .filter(tf => tf.detectionType === 'face' && tf.faces.length > 0)
+        .flatMap(tf => tf.faces)
 
-    const filterComplex = buildContextFilter(dims, rawX1, rawX2)
-    console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} topX=${rawX1} botX=${rawX2}`)
+      if (allFaces.length >= 2) {
+        const sorted = [...allFaces].sort((a, b) => a.centerX - b.centerX)
+        const mid = Math.floor(sorted.length / 2)
+        const avg = (arr: FaceBox[]) => arr.reduce((s, f) => s + f.centerX, 0) / arr.length
+        topX = clamp(Math.floor(avg(sorted.slice(0, mid)) - cropW / 2))
+        botX = clamp(Math.floor(avg(sorted.slice(mid)) - cropW / 2))
+        console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} clustered topX=${topX} botX=${botX} (${allFaces.length} faces)`)
+      } else {
+        topX = centerX
+        botX = centerX
+        console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} insufficient faces — centering both panels`)
+      }
+    }
+
+    const filterComplex = buildContextFilter(dims, topX, botX)
 
     execFileSync(ffmpeg, [
       '-loglevel', 'error',
