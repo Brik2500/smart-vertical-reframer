@@ -477,7 +477,7 @@ function buildContextFilter(
   // This mirrors how smart-crop handles X positioning, applied vertically too.
   const panelOutW = 1080
   const panelOutH = 640
-  const cropW = Math.floor(dims.width / 2 / 2) * 2   // half source width, keep even
+  const cropW = Math.floor(dims.width / 3 / 2) * 2   // half source width, keep even
 
   // Middle panel: scale full source to fit 1080w, letterbox to 640h.
   const midH = Math.floor(dims.height * (panelOutW / dims.width) / 2) * 2
@@ -601,7 +601,7 @@ function renderSegment(
     // Three-panel layout: top = face A crop, middle = original frame, bottom = face B crop.
     const panelOutW = 1080
     const panelOutH = 640
-    const cropW = Math.floor(dims.width / 2 / 2) * 2
+    const cropW = Math.floor(dims.width / 3 / 2) * 2
     const clampX = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
 
     // After scaling a cropW-wide strip to panelOutW, the source height scales up too.
