@@ -1,4 +1,5 @@
 import type { TimedFace, FrameDimensions, DetectionType } from './faceDetection'
+import type { VideoSegment } from './segmentEngine'
 
 export type JobStatus = 'pending' | 'detecting' | 'review' | 'rendering' | 'done' | 'error'
 
@@ -28,6 +29,8 @@ export interface Job {
   timedFaces?: TimedFace[]
   dims?: FrameDimensions
   sceneCuts?: number[]
+  duration?: number          // source video duration in seconds
+  segments?: VideoSegment[]  // canonical segment set — built once at detect time
 }
 
 const jobs = new Map<string, Job>()

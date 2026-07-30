@@ -1,7 +1,7 @@
 import path from 'path'
 import { TMP_DIR } from './videoUpload'
 import { detectFacesOverTime, decideSplitScreen, getVideoDuration, TimedFace, FrameDimensions } from './faceDetection'
-import { classifySegments, renderVideoWithSegments, VideoSegment } from './segmentEngine'
+import { classifySegments, buildCanonicalSegments, renderVideoWithSegments, VideoSegment } from './segmentEngine'
 import { SplitScreenParams } from './splitScreenEngine'
 import { computeSmartCrop } from './cropEngine'
 import { detectSceneCuts } from './sceneDetection'
@@ -14,7 +14,7 @@ export type ReframingMode = 'smart-crop' | 'split-screen' | 'auto'
 export async function detectVideo(
   jobId: string,
   inputPath: string
-): Promise<{ timedFaces: TimedFace[]; dims: FrameDimensions; sampledFrames: SampledFrame[]; sceneCuts: number[] }> {
+): Promise<{ timedFaces: TimedFace[]; dims: FrameDimensions; sampledFrames: SampledFrame[]; sceneCuts: number[]; duration: number; segments: VideoSegment[] }> {
   // Detect scene cuts first so we can oversample around them.
   // Cuts are where the biggest position jumps happen — extra samples there
   // give the outlier-rejection pass real data instead of a 3s blind spot.
@@ -56,13 +56,16 @@ export async function detectVideo(
     }
   })
 
-  return { timedFaces, dims, sampledFrames, sceneCuts }
+  const duration = getVideoDuration(inputPath)
+  const segments = buildCanonicalSegments(timedFaces, dims, duration, sceneCuts)
+  return { timedFaces, dims, sampledFrames, sceneCuts, duration, segments }
 }
 
 export interface SplitOverride {
   time: number
-  cropX: number   // top-half X position
-  cropX2: number  // bottom-half X position
+  cropX: number    // top-half X position
+  cropX2: number   // bottom-half X position
+  segmentId?: string  // stable ID for override matching; falls back to time if absent
 }
 
 export async function renderVideo(
@@ -73,7 +76,8 @@ export async function renderVideo(
   timedFaces: TimedFace[],
   manualKeyframes: ManualKeyframe[] = [],
   splitOverrides: SplitOverride[] = [],
-  sceneCuts: number[] = []
+  sceneCuts: number[] = [],
+  canonicalSegments?: VideoSegment[]  // pre-built at detect time; falls back to classify if absent
 ): Promise<string> {
   const outputPath = path.join(TMP_DIR, `${jobId}_output.mp4`)
   const duration = getVideoDuration(inputPath)
@@ -94,7 +98,12 @@ export async function renderVideo(
     return outputPath
   }
 
-  const segments = classifySegments(timedFaces, dims, duration, sceneCuts)
+  // Use canonical segments if available (built at detect time) — prevents re-classification
+  // from producing different boundaries than what the user reviewed.
+  // Fall back to classify for jobs that pre-date canonical segment storage.
+  const segments = canonicalSegments
+    ? canonicalSegments.map(s => ({ ...s }))  // shallow copy so overrides don't mutate stored segments
+    : classifySegments(timedFaces, dims, duration, sceneCuts)
   applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
   console.log(`[render] ─── FINAL SEGMENTS after overrides (${segments.length}) ───`)
   segments.forEach((s, i) => console.log(`[render]   ${i + 1}: ${s.type.toUpperCase().padEnd(14)} ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s`))

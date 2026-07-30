@@ -1,18 +1,41 @@
 import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
+import { randomUUID } from 'crypto'
 import { TimedFace, FaceBox, FrameDimensions } from './faceDetection'
 import { buildDynamicSmartCropFilter, buildSmartCropFilter, computeSmartCrop, ManualKeyframe } from './cropEngine'
 import { buildSplitScreenFilter, buildDynamicSplitScreenFilter, computeSplitScreen, SplitScreenParams, DynamicSplitResult } from './splitScreenEngine'
 import { TMP_DIR } from './videoUpload'
 
+// What Vertiframe observed about the footage — describes the source, not the user's choice.
+export type SegmentClassification = 'face-track' | 'low-confidence' | 'multi-subject'
+
+// What gets rendered — layout-agnostic, decoupled from classification.
+export type LayoutType = 'crop' | 'split-screen' | 'three-panel'
+
+// Measurable editorial characteristics per segment.
+// movementScore and cropStability are null until crop-path extraction is implemented (v2).
+export interface EditorialMeta {
+  trackingConfidence: number        // 0–1, average detection quality across samples
+  cutDensity: number                // scene cuts per second within this segment
+  speakerSwitchRate: number | null  // dominant-face switches per sample; null for single-subject
+  movementScore: null               // reserved for v2 crop-path analysis
+  cropStability: null               // reserved for v2 crop-path analysis
+  analysisVersion: 1
+}
+
 export interface VideoSegment {
   start: number               // seconds into source video
   end: number
-  type: 'smart-crop' | 'split-screen' | 'context'
+  type: 'smart-crop' | 'split-screen' | 'context'  // retained for render-branch compatibility
   timedFaces: TimedFace[]     // samples that fall in this segment (global timestamps)
   splitFaces?: [FaceBox, FaceBox]
   manualSplitParams?: SplitScreenParams  // set when user manually positioned both boxes
+  // canonical architecture fields — populated by buildCanonicalSegments(), absent on legacy segments
+  id?: string
+  classification?: SegmentClassification
+  defaultLayout?: LayoutType
+  editorialMeta?: EditorialMeta
 }
 
 // Confidence score 0–1 for a set of detection samples.
@@ -31,6 +54,75 @@ function segmentConfidence(samples: TimedFace[]): number {
     }
   })
   return scores.reduce((a, b) => a + b, 0) / scores.length
+}
+
+function typeToClassification(type: VideoSegment['type']): SegmentClassification {
+  if (type === 'split-screen') return 'multi-subject'
+  if (type === 'context')      return 'low-confidence'
+  return 'face-track'
+}
+
+function typeToLayout(type: VideoSegment['type']): LayoutType {
+  if (type === 'split-screen') return 'split-screen'
+  if (type === 'context')      return 'three-panel'
+  return 'crop'
+}
+
+function computeEditorialMeta(seg: VideoSegment, sceneCuts: number[]): EditorialMeta {
+  const duration = seg.end - seg.start
+  const trackingConfidence = segmentConfidence(seg.timedFaces)
+  const cutsInSegment = sceneCuts.filter(c => c > seg.start && c < seg.end).length
+  const cutDensity = duration > 0 ? cutsInSegment / duration : 0
+
+  let speakerSwitchRate: number | null = null
+  if (seg.type === 'split-screen') {
+    const twoFaceSamples = seg.timedFaces.filter(tf => tf.faces.length >= 2)
+    if (twoFaceSamples.length >= 2) {
+      let switches = 0
+      let prevDominantWasLeft: boolean | null = null
+      for (const tf of twoFaceSamples) {
+        const [a, b] = tf.faces
+        const aArea = a.width * a.height
+        const bArea = b.width * b.height
+        const dominant = aArea >= bArea ? a : b
+        const midX = (a.centerX + b.centerX) / 2
+        const isLeft = dominant.centerX < midX
+        if (prevDominantWasLeft !== null && isLeft !== prevDominantWasLeft) switches++
+        prevDominantWasLeft = isLeft
+      }
+      speakerSwitchRate = switches / (twoFaceSamples.length - 1)
+    } else {
+      speakerSwitchRate = 0
+    }
+  }
+
+  return {
+    trackingConfidence,
+    cutDensity,
+    speakerSwitchRate,
+    movementScore: null,
+    cropStability: null,
+    analysisVersion: 1,
+  }
+}
+
+// Build the canonical segment set: classify once, stamp stable IDs and editorial metadata.
+// This is the authoritative segment model — store it on the Job after detection so the
+// renderer consumes it directly without reclassifying.
+export function buildCanonicalSegments(
+  timedFaces: TimedFace[],
+  dims: FrameDimensions,
+  duration: number,
+  sceneCuts: number[] = []
+): VideoSegment[] {
+  const base = classifySegments(timedFaces, dims, duration, sceneCuts)
+  return base.map(seg => ({
+    ...seg,
+    id: randomUUID(),
+    classification: typeToClassification(seg.type),
+    defaultLayout: typeToLayout(seg.type),
+    editorialMeta: computeEditorialMeta(seg, sceneCuts),
+  }))
 }
 
 function ffmpegBin(): string {

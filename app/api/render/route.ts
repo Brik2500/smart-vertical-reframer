@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
       durationSecs: Math.round(videoDuration),
     })
 
-    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides, job.sceneCuts ?? [])
+    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides, job.sceneCuts ?? [], job.segments)
       .then(outputPath => {
         const renderTimeSecs = (Date.now() - renderStart) / 1000
         updateJob(jobId, { status: 'done', outputPath })
