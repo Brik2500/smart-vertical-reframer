@@ -468,11 +468,15 @@ export function renderVideoWithSegments(
 // Panel aspect: 1080/640 = 1.6875 ≈ 16:9.6 — close enough to 16:9 that the
 // letterboxed wide panel reads naturally without visible distortion.
 function buildContextFilter(dims: FrameDimensions, cropX: number, cropX2?: number): string {
-  // Crop width for top/bottom panels: full source height mapped to 1080x640 output.
-  // source_height * (out_w / out_h) = 1080 * (1080/640) = 1822.5 → floor to even.
+  // Crop width for top/bottom panels: half the source width so each panel can
+  // isolate one subject. Using the old formula (height * 1080/640) produced a
+  // 1822px window on 1920px sources, leaving only 98px of horizontal range and
+  // making both panels look identical.
   const panelOutW = 1080
   const panelOutH = 640
-  const cropW = Math.floor(dims.height * (panelOutW / panelOutH) / 2) * 2  // keep even
+  const cropW = Math.floor(dims.width / 2 / 2) * 2        // half source width, keep even
+  const cropH = Math.floor(cropW * panelOutH / panelOutW / 2) * 2  // maintain 27:16 ratio
+  const cropY = Math.floor((dims.height - cropH) / 2)     // center vertically
   const clampX = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
 
   const topX = clampX(cropX)
@@ -484,9 +488,9 @@ function buildContextFilter(dims: FrameDimensions, cropX: number, cropX2?: numbe
 
   return [
     `[0:v]split=3[top_src][mid_src][bot_src]`,
-    `[top_src]crop=${cropW}:${dims.height}:${topX}:0,scale=${panelOutW}:${panelOutH}[top]`,
+    `[top_src]crop=${cropW}:${cropH}:${topX}:${cropY},scale=${panelOutW}:${panelOutH}[top]`,
     `[mid_src]scale=${panelOutW}:${midH},pad=${panelOutW}:${panelOutH}:0:${padTop}:black[mid]`,
-    `[bot_src]crop=${cropW}:${dims.height}:${botX}:0,scale=${panelOutW}:${panelOutH}[bot]`,
+    `[bot_src]crop=${cropW}:${cropH}:${botX}:${cropY},scale=${panelOutW}:${panelOutH}[bot]`,
     `[top][mid][bot]vstack=inputs=3[out]`,
   ].join(';')
 }
@@ -599,7 +603,7 @@ function renderSegment(
   } else if (seg.type === 'context') {
     // Three-panel layout: top = face A crop, middle = original frame, bottom = face B crop.
     // Panel aspect ratio is 1080×640 (27:16), so each crop strip is wider than a 9:16 crop.
-    const cropW = Math.floor(dims.height * (1080 / 640) / 2) * 2
+    const cropW = Math.floor(dims.width / 2 / 2) * 2
     const clamp = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
     const centerX = clamp(Math.floor((dims.width - cropW) / 2))
 
