@@ -106,38 +106,42 @@ export async function renderVideo(
     ? canonicalSegments!.map(s => ({ ...s }))  // shallow copy so overrides don't mutate stored segments
     : classifySegments(timedFaces, dims, duration, sceneCuts)
 
-  // REGRESSION LOG (development only) — compare canonical vs fresh classification.
-  // Verifies start, end, type, timedFaces count, and splitFaces presence match exactly.
+  // REGRESSION CHECK — enable via SEGMENT_REGRESSION_CHECK=true on the Railway preview
+  // environment only. Off by default; produces no overhead in normal production.
   // Remove this block before merging feature/three-panel → main.
-  if (usingCanonical && process.env.NODE_ENV === 'development') {
-    console.log(`[regression] using canonical segments (built at detect time)`)
+  if (usingCanonical && process.env.SEGMENT_REGRESSION_CHECK === 'true') {
     const fresh = classifySegments(timedFaces, dims, duration, sceneCuts)
     const canonical = segments
-    const maxLen = Math.max(canonical.length, fresh.length)
-    let allMatch = true
-    for (let i = 0; i < maxLen; i++) {
-      const c = canonical[i]
-      const f = fresh[i]
-      if (!c || !f) {
-        console.warn(`[regression] segment count mismatch: canonical=${canonical.length} fresh=${fresh.length}`)
-        allMatch = false
-        break
+    console.log(`[regression] canonical=${canonical.length} fresh=${fresh.length}`)
+
+    if (canonical.length !== fresh.length) {
+      console.warn(`[regression] ✗ segment count mismatch`)
+    } else {
+      let boundaryOk = true, typeOk = true, facesOk = true, splitFacesOk = true
+      for (let i = 0; i < canonical.length; i++) {
+        const c = canonical[i], f = fresh[i]
+        if (Math.abs(c.start - f.start) >= 0.01 || Math.abs(c.end - f.end) >= 0.01) {
+          console.warn(`[regression] ✗ segment ${i + 1} boundary: canonical=${c.start.toFixed(2)}→${c.end.toFixed(2)} fresh=${f.start.toFixed(2)}→${f.end.toFixed(2)}`)
+          boundaryOk = false
+        }
+        if (c.type !== f.type) {
+          console.warn(`[regression] ✗ segment ${i + 1} type: canonical=${c.type} fresh=${f.type}`)
+          typeOk = false
+        }
+        if (c.timedFaces.length !== f.timedFaces.length) {
+          console.warn(`[regression] ✗ segment ${i + 1} timedFaces: canonical=${c.timedFaces.length} fresh=${f.timedFaces.length}`)
+          facesOk = false
+        }
+        if ((!!c.splitFaces) !== (!!f.splitFaces)) {
+          console.warn(`[regression] ✗ segment ${i + 1} splitFaces: canonical=${!!c.splitFaces} fresh=${!!f.splitFaces}`)
+          splitFacesOk = false
+        }
       }
-      const startMatch      = Math.abs(c.start - f.start) < 0.01
-      const endMatch        = Math.abs(c.end   - f.end)   < 0.01
-      const typeMatch       = c.type === f.type
-      const facesMatch      = c.timedFaces.length === f.timedFaces.length
-      const splitFacesMatch = (!!c.splitFaces) === (!!f.splitFaces)
-      if (!startMatch || !endMatch || !typeMatch || !facesMatch || !splitFacesMatch) {
-        console.warn(
-          `[regression] seg ${i + 1} MISMATCH: ` +
-          `canonical=${c.type} ${c.start.toFixed(2)}→${c.end.toFixed(2)} faces=${c.timedFaces.length} splitFaces=${!!c.splitFaces} | ` +
-          `fresh=${f.type} ${f.start.toFixed(2)}→${f.end.toFixed(2)} faces=${f.timedFaces.length} splitFaces=${!!f.splitFaces}`
-        )
-        allMatch = false
-      }
+      if (boundaryOk)    console.log(`[regression] ✓ boundaries match`)
+      if (typeOk)        console.log(`[regression] ✓ types match`)
+      if (facesOk)       console.log(`[regression] ✓ timedFaces counts match`)
+      if (splitFacesOk)  console.log(`[regression] ✓ splitFaces match`)
     }
-    if (allMatch) console.log(`[regression] ✓ all ${canonical.length} segments match (start, end, type, timedFaces, splitFaces)`)
   }
 
   applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
