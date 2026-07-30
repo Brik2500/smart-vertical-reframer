@@ -17,6 +17,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       sampledFrames: job.sampledFrames,
       frameW: job.dims?.width,
       frameH: job.dims?.height,
+      segments: (job.segments ?? []).map(s => ({
+        id: s.id ?? '',
+        start: s.start,
+        end: s.end,
+        defaultLayout: s.defaultLayout ?? (
+          s.type === 'split-screen' ? 'split-screen' :
+          s.type === 'context'      ? 'three-panel'  : 'crop'
+        ),
+      })),
     }),
   })
 }

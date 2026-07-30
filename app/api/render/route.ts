@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getJob, updateJob } from '@/lib/jobStore'
-import { renderVideo, ReframingMode, SplitOverride } from '@/lib/exportEngine'
+import { renderVideo, ReframingMode, SplitOverride, LayoutOverride } from '@/lib/exportEngine'
 import { saveCorrections } from '@/lib/correctionsStore'
 import { notifyRenderSuccess, notifyRenderFailure } from '@/lib/slackNotifier'
 import { userFacingError, classifyError } from '@/lib/errorClassifier'
@@ -17,7 +17,11 @@ interface Override {
 
 export async function POST(req: NextRequest) {
   try {
-    const { jobId, overrides }: { jobId: string; overrides: Override[] } = await req.json()
+    const { jobId, overrides, layoutOverrides = [] }: {
+      jobId: string
+      overrides: Override[]
+      layoutOverrides: LayoutOverride[]
+    } = await req.json()
     const job = getJob(jobId)
 
     if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
@@ -102,7 +106,7 @@ export async function POST(req: NextRequest) {
       durationSecs: Math.round(videoDuration),
     })
 
-    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides, job.sceneCuts ?? [], job.segments)
+    renderVideo(jobId, job.inputPath, job.mode as ReframingMode, job.dims, job.timedFaces, anchoredKeyframes, splitOverrides, job.sceneCuts ?? [], job.segments, layoutOverrides)
       .then(outputPath => {
         const renderTimeSecs = (Date.now() - renderStart) / 1000
         updateJob(jobId, { status: 'done', outputPath })

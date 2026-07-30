@@ -1,12 +1,26 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import posthog from 'posthog-js'
 import type { SampledFrame } from '@/lib/jobStore'
+
+type LayoutChoice = 'crop' | 'split-screen' | 'three-panel'
+
+interface ReviewSegment {
+  id: string
+  start: number
+  end: number
+  defaultLayout: LayoutChoice
+}
 
 interface ReviewStepProps {
   jobId: string
   frames: SampledFrame[]
-  onRender: (overrides: { time: number; cropX: number; cropX2?: number; splitScreen?: boolean }[]) => void
+  segments?: ReviewSegment[]
+  onRender: (
+    overrides: { time: number; cropX: number; cropX2?: number; splitScreen?: boolean }[],
+    layoutOverrides: { segmentId: string; layout: string }[]
+  ) => void
 }
 
 const DETECTION_LABELS: Record<string, string> = {
@@ -250,7 +264,15 @@ function FrameCard({
               const dx = (e.clientX - startClientX.current) / scale
               onChange(Math.round(Math.max(0, Math.min(frame.frameW - frame.cropW, startCropX.current + dx))))
             }}
-            onPointerUp={() => { isDragging.current = false }}
+            onPointerUp={() => {
+              isDragging.current = false
+              if (Math.abs(cropX - frame.cropX) > 2) {
+                posthog.capture('crop_adjusted', {
+                  frame_time: frame.time,
+                  detection_type: frame.detectionType,
+                })
+              }
+            }}
           >
             <div className="absolute left-0 inset-y-0 w-1.5 bg-indigo-400/60" />
             <div className="absolute right-0 inset-y-0 w-1.5 bg-indigo-400/60" />
@@ -295,7 +317,19 @@ function FrameCard({
   )
 }
 
-export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
+const LAYOUT_LABELS: Record<LayoutChoice, string> = {
+  'crop': 'Crop',
+  'split-screen': 'Split Screen',
+  'three-panel': '3 Panel',
+}
+
+const LAYOUT_ACTIVE_COLORS: Record<LayoutChoice, string> = {
+  'crop': 'bg-indigo-600 text-white',
+  'split-screen': 'bg-violet-600 text-white',
+  'three-panel': 'bg-teal-600 text-white',
+}
+
+export function ReviewStep({ jobId, frames, segments, onRender }: ReviewStepProps) {
   const [cropPositions, setCropPositions] = useState<Record<number, number>>(
     Object.fromEntries(frames.map(f => [f.time, f.cropX]))
   )
@@ -303,6 +337,9 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
     Object.fromEntries(frames.map(f => [f.time, f.cropX]))
   )
   const [splitModes, setSplitModes] = useState<Record<number, boolean>>({})
+  const [layoutChoices, setLayoutChoices] = useState<Record<string, LayoutChoice>>(
+    () => Object.fromEntries((segments ?? []).map(s => [s.id, s.defaultLayout]))
+  )
 
   const adjustedCount = frames.filter(f =>
     !splitModes[f.time] && Math.abs(cropPositions[f.time] - f.cropX) > 2
@@ -316,13 +353,15 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
       cropX2: cropPositions2[f.time],
       splitScreen: splitModes[f.time] ?? false,
     }))
-    onRender(overrides)
+    const layoutOverrides = Object.entries(layoutChoices).map(([segmentId, layout]) => ({ segmentId, layout }))
+    onRender(overrides, layoutOverrides)
   }
 
   const handleReset = () => {
     setCropPositions(Object.fromEntries(frames.map(f => [f.time, f.cropX])))
     setCropPositions2(Object.fromEntries(frames.map(f => [f.time, f.cropX])))
     setSplitModes({})
+    setLayoutChoices(Object.fromEntries((segments ?? []).map(s => [s.id, s.defaultLayout])))
   }
 
   return (
@@ -343,6 +382,40 @@ export function ReviewStep({ jobId, frames, onRender }: ReviewStepProps) {
           Drag the blue box to reposition. Toggle Split Screen to set crop positions for each output half independently.
         </p>
       </div>
+
+      {/* Segment-level layout controls — shown when canonical segments are available */}
+      {segments && segments.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-zinc-500 uppercase tracking-widest font-medium">Segment layouts</p>
+          <div className="space-y-2">
+            {segments.map(seg => {
+              const active = layoutChoices[seg.id] ?? seg.defaultLayout
+              return (
+                <div key={seg.id} className="flex items-center gap-3">
+                  <span className="text-[11px] text-zinc-500 w-28 shrink-0 tabular-nums">
+                    {formatSeconds(seg.start)} – {formatSeconds(seg.end)}
+                  </span>
+                  <div className="flex rounded-md overflow-hidden border border-zinc-700 text-[10px] font-semibold flex-1">
+                    {(['crop', 'split-screen', 'three-panel'] as LayoutChoice[]).map(layout => (
+                      <button
+                        key={layout}
+                        onClick={() => setLayoutChoices(prev => ({ ...prev, [seg.id]: layout }))}
+                        className={`flex-1 py-1.5 transition-colors ${
+                          active === layout
+                            ? LAYOUT_ACTIVE_COLORS[layout]
+                            : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {LAYOUT_LABELS[layout]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4">
         {frames.map(f => (

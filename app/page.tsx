@@ -7,6 +7,13 @@ import type { SampledFrame } from '@/lib/jobStore'
 
 type Stage = 'idle' | 'uploading' | 'detecting' | 'reviewing' | 'rendering' | 'done' | 'error'
 
+interface ReviewSegment {
+  id: string
+  start: number
+  end: number
+  defaultLayout: 'crop' | 'split-screen' | 'three-panel'
+}
+
 const PROJECT_TYPES = [
   // Level 1 — works well, no warning
   'Podcast', 'Interview', 'Documentary', 'Narrative',
@@ -81,6 +88,7 @@ export default function Home() {
   const [projectType, setProjectType] = useState<ProjectType | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [sampledFrames, setSampledFrames] = useState<SampledFrame[]>([])
+  const [reviewSegments, setReviewSegments] = useState<ReviewSegment[]>([])
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [validating, setValidating] = useState(false)
@@ -101,6 +109,7 @@ export default function Home() {
     setProjectType(null)
     setJobId(null)
     setSampledFrames([])
+    setReviewSegments([])
     setError(null)
     setSurveyDone(false)
     setRating(null)
@@ -163,6 +172,7 @@ export default function Home() {
       if (data.status === 'review') {
         clearInterval(pollRef.current!)
         setSampledFrames(data.sampledFrames ?? [])
+        setReviewSegments(data.segments ?? [])
         setStage('reviewing')
       } else if (data.status === 'done') {
         clearInterval(pollRef.current!)
@@ -213,7 +223,10 @@ export default function Home() {
     }
   }
 
-  const handleRender = async (overrides: { time: number; cropX: number; cropX2?: number; splitScreen?: boolean }[]) => {
+  const handleRender = async (
+    overrides: { time: number; cropX: number; cropX2?: number; splitScreen?: boolean }[],
+    layoutOverrides: { segmentId: string; layout: string }[] = []
+  ) => {
     if (!jobId) return
     setStage('rendering')
 
@@ -221,7 +234,7 @@ export default function Home() {
       const res = await fetch('/api/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId, overrides }),
+        body: JSON.stringify({ jobId, overrides, layoutOverrides }),
       })
       if (!res.ok) throw new Error('Failed to start render')
       pollStatus(jobId)
@@ -380,6 +393,7 @@ export default function Home() {
           <ReviewStep
             jobId={jobId}
             frames={sampledFrames}
+            segments={reviewSegments}
             onRender={handleRender}
           />
         )}

@@ -68,6 +68,24 @@ export interface SplitOverride {
   segmentId?: string  // stable ID for override matching; falls back to time if absent
 }
 
+export interface LayoutOverride {
+  segmentId: string
+  layout: string   // 'crop' | 'split-screen' | 'three-panel'
+}
+
+function applyLayoutOverrides(segments: VideoSegment[], overrides: LayoutOverride[]): void {
+  if (!overrides.length) return
+  const byId = new Map(overrides.map(o => [o.segmentId, o.layout]))
+  for (const seg of segments) {
+    if (!seg.id) continue
+    const layout = byId.get(seg.id)
+    if (!layout) continue
+    if (layout === 'crop')         seg.type = 'smart-crop'
+    if (layout === 'split-screen') seg.type = 'split-screen'
+    if (layout === 'three-panel')  seg.type = 'context'
+  }
+}
+
 export async function renderVideo(
   jobId: string,
   inputPath: string,
@@ -77,7 +95,8 @@ export async function renderVideo(
   manualKeyframes: ManualKeyframe[] = [],
   splitOverrides: SplitOverride[] = [],
   sceneCuts: number[] = [],
-  canonicalSegments?: VideoSegment[]  // pre-built at detect time; falls back to classify if absent
+  canonicalSegments?: VideoSegment[],
+  layoutOverrides: LayoutOverride[] = []
 ): Promise<string> {
   const outputPath = path.join(TMP_DIR, `${jobId}_output.mp4`)
   const duration = getVideoDuration(inputPath)
@@ -105,6 +124,10 @@ export async function renderVideo(
   const segments = usingCanonical
     ? canonicalSegments!.map(s => ({ ...s }))  // shallow copy so overrides don't mutate stored segments
     : classifySegments(timedFaces, dims, duration, sceneCuts)
+
+  // Apply segment-level layout choices from the review UI (crop / split-screen / three-panel).
+  // Must run before the regression check so the check compares fresh vs canonical before overrides.
+  applyLayoutOverrides(segments, layoutOverrides)
 
   // REGRESSION CHECK — enable via SEGMENT_REGRESSION_CHECK=true on the Railway preview
   // environment only. Off by default; produces no overhead in normal production.
