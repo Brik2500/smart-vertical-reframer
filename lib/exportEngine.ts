@@ -101,7 +101,7 @@ export async function renderVideo(
   // Use canonical segments if available (built at detect time) — prevents re-classification
   // from producing different boundaries than what the user reviewed.
   // Fall back to classify for jobs that pre-date canonical segment storage.
-  const segments = canonicalSegments
+  const segments = (canonicalSegments && canonicalSegments.length > 0)
     ? canonicalSegments.map(s => ({ ...s }))  // shallow copy so overrides don't mutate stored segments
     : classifySegments(timedFaces, dims, duration, sceneCuts)
   applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
