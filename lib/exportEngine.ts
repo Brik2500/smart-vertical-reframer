@@ -101,9 +101,40 @@ export async function renderVideo(
   // Use canonical segments if available (built at detect time) — prevents re-classification
   // from producing different boundaries than what the user reviewed.
   // Fall back to classify for jobs that pre-date canonical segment storage.
-  const segments = (canonicalSegments && canonicalSegments.length > 0)
-    ? canonicalSegments.map(s => ({ ...s }))  // shallow copy so overrides don't mutate stored segments
+  const usingCanonical = canonicalSegments && canonicalSegments.length > 0
+  const segments = usingCanonical
+    ? canonicalSegments!.map(s => ({ ...s }))  // shallow copy so overrides don't mutate stored segments
     : classifySegments(timedFaces, dims, duration, sceneCuts)
+
+  // REGRESSION LOG: when canonical segments are used, compare them against a fresh
+  // classify pass so we can confirm boundaries and types match exactly.
+  // Remove once regression test is confirmed on Railway.
+  if (usingCanonical) {
+    console.log(`[regression] using canonical segments (built at detect time)`)
+    const fresh = classifySegments(timedFaces, dims, duration, sceneCuts)
+    const canonical = segments
+    const maxLen = Math.max(canonical.length, fresh.length)
+    let allMatch = true
+    for (let i = 0; i < maxLen; i++) {
+      const c = canonical[i]
+      const f = fresh[i]
+      if (!c || !f) {
+        console.warn(`[regression] segment count mismatch: canonical=${canonical.length} fresh=${fresh.length}`)
+        allMatch = false
+        break
+      }
+      const startMatch = Math.abs(c.start - f.start) < 0.01
+      const endMatch   = Math.abs(c.end   - f.end)   < 0.01
+      const typeMatch  = c.type === f.type
+      const facesMatch = c.timedFaces.length === f.timedFaces.length
+      if (!startMatch || !endMatch || !typeMatch || !facesMatch) {
+        console.warn(`[regression] seg ${i + 1} MISMATCH: canonical=${c.type} ${c.start.toFixed(2)}→${c.end.toFixed(2)} faces=${c.timedFaces.length} | fresh=${f.type} ${f.start.toFixed(2)}→${f.end.toFixed(2)} faces=${f.timedFaces.length}`)
+        allMatch = false
+      }
+    }
+    if (allMatch) console.log(`[regression] ✓ all ${canonical.length} segments match fresh classification`)
+  }
+
   applyManualSplitScreens(segments, splitOverrides, dims, timedFaces, sceneCuts)
   console.log(`[render] ─── FINAL SEGMENTS after overrides (${segments.length}) ───`)
   segments.forEach((s, i) => console.log(`[render]   ${i + 1}: ${s.type.toUpperCase().padEnd(14)} ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s`))
