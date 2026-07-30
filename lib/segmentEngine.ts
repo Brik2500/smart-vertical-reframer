@@ -467,20 +467,17 @@ export function renderVideoWithSegments(
 //
 // Panel aspect: 1080/640 = 1.6875 ≈ 16:9.6 — close enough to 16:9 that the
 // letterboxed wide panel reads naturally without visible distortion.
-function buildContextFilter(dims: FrameDimensions, cropX: number, cropX2?: number): string {
-  // Crop width for top/bottom panels: half the source width so each panel can
-  // isolate one subject. Using the old formula (height * 1080/640) produced a
-  // 1822px window on 1920px sources, leaving only 98px of horizontal range and
-  // making both panels look identical.
+function buildContextFilter(
+  dims: FrameDimensions,
+  topX: number, topCropY: number,
+  botX: number, botCropY: number,
+): string {
+  // Crop each face panel: narrow X strip (half frame width) at full source height,
+  // scale to 1080 wide, then take a 640-tall slice centered on the face's Y position.
+  // This mirrors how smart-crop handles X positioning, applied vertically too.
   const panelOutW = 1080
   const panelOutH = 640
-  const cropW = Math.floor(dims.width / 2 / 2) * 2        // half source width, keep even
-  const cropH = Math.floor(cropW * panelOutH / panelOutW / 2) * 2  // maintain 27:16 ratio
-  const cropY = Math.floor((dims.height - cropH) / 2)     // center vertically
-  const clampX = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
-
-  const topX = clampX(cropX)
-  const botX = clampX(cropX2 ?? cropX)
+  const cropW = Math.floor(dims.width / 2 / 2) * 2   // half source width, keep even
 
   // Middle panel: scale full source to fit 1080w, letterbox to 640h.
   const midH = Math.floor(dims.height * (panelOutW / dims.width) / 2) * 2
@@ -488,9 +485,9 @@ function buildContextFilter(dims: FrameDimensions, cropX: number, cropX2?: numbe
 
   return [
     `[0:v]split=3[top_src][mid_src][bot_src]`,
-    `[top_src]crop=${cropW}:${cropH}:${topX}:${cropY},scale=${panelOutW}:${panelOutH}[top]`,
+    `[top_src]crop=${cropW}:${dims.height}:${topX}:0,scale=${panelOutW}:-2,crop=${panelOutW}:${panelOutH}:0:${topCropY}[top]`,
     `[mid_src]scale=${panelOutW}:${midH},pad=${panelOutW}:${panelOutH}:0:${padTop}:black[mid]`,
-    `[bot_src]crop=${cropW}:${cropH}:${botX}:${cropY},scale=${panelOutW}:${panelOutH}[bot]`,
+    `[bot_src]crop=${cropW}:${dims.height}:${botX}:0,scale=${panelOutW}:-2,crop=${panelOutW}:${panelOutH}:0:${botCropY}[bot]`,
     `[top][mid][bot]vstack=inputs=3[out]`,
   ].join(';')
 }
@@ -602,26 +599,33 @@ function renderSegment(
     return dynamicResult
   } else if (seg.type === 'context') {
     // Three-panel layout: top = face A crop, middle = original frame, bottom = face B crop.
-    // Panel aspect ratio is 1080×640 (27:16), so each crop strip is wider than a 9:16 crop.
+    const panelOutW = 1080
+    const panelOutH = 640
     const cropW = Math.floor(dims.width / 2 / 2) * 2
-    const clamp = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
-    const centerX = clamp(Math.floor((dims.width - cropW) / 2))
+    const clampX = (x: number) => Math.max(0, Math.min(dims.width - cropW, x))
 
-    let topX: number
-    let botX: number
+    // After scaling a cropW-wide strip to panelOutW, the source height scales up too.
+    // We then take a panelOutH-tall slice centered on the face's Y coordinate.
+    const scale = panelOutW / cropW
+    const scaledH = Math.floor(dims.height * scale)
+    const clampY = (cy: number) => Math.max(0, Math.min(scaledH - panelOutH, Math.floor(cy * scale - panelOutH / 2)))
+
+    const centerX = clampX(Math.floor((dims.width - cropW) / 2))
+    const centerY = clampY(dims.height / 2)
+
+    let topX: number, topY: number
+    let botX: number, botY: number
 
     if (seg.splitFaces && seg.splitFaces[0] && seg.splitFaces[1]
         && Math.abs(seg.splitFaces[0].centerX - seg.splitFaces[1].centerX) > 50) {
-      // Two distinct faces already identified by the split-screen classifier.
-      // Sort by centerX so left subject is always top panel, right is always bottom.
-      // This keeps each person in the same panel for the entire segment.
+      // Sort by centerX: left subject → top panel, right subject → bottom panel.
       const [fA, fB] = [...seg.splitFaces].sort((a, b) => a.centerX - b.centerX)
-      topX = clamp(Math.floor(fA.centerX - cropW / 2))
-      botX = clamp(Math.floor(fB.centerX - cropW / 2))
-      console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} using splitFaces topX=${topX} (cx=${Math.round(fA.centerX)}) botX=${botX} (cx=${Math.round(fB.centerX)})`)
+      topX = clampX(Math.floor(fA.centerX - cropW / 2))
+      topY = clampY(fA.centerY)
+      botX = clampX(Math.floor(fB.centerX - cropW / 2))
+      botY = clampY(fB.centerY)
+      console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} using splitFaces topX=${topX} topY=${topY} (cx=${Math.round(fA.centerX)} cy=${Math.round(fA.centerY)}) botX=${botX} botY=${botY} (cx=${Math.round(fB.centerX)} cy=${Math.round(fB.centerY)})`)
     } else {
-      // Fall back: cluster all face detections in the segment into left and right groups.
-      // Average each cluster's centerX to find the two persistent subject positions.
       const allFaces = seg.timedFaces
         .filter(tf => tf.detectionType === 'face' && tf.faces.length > 0)
         .flatMap(tf => tf.faces)
@@ -629,18 +633,21 @@ function renderSegment(
       if (allFaces.length >= 2) {
         const sorted = [...allFaces].sort((a, b) => a.centerX - b.centerX)
         const mid = Math.floor(sorted.length / 2)
-        const avg = (arr: FaceBox[]) => arr.reduce((s, f) => s + f.centerX, 0) / arr.length
-        topX = clamp(Math.floor(avg(sorted.slice(0, mid)) - cropW / 2))
-        botX = clamp(Math.floor(avg(sorted.slice(mid)) - cropW / 2))
-        console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} clustered topX=${topX} botX=${botX} (${allFaces.length} faces)`)
+        const avgX = (arr: FaceBox[]) => arr.reduce((s, f) => s + f.centerX, 0) / arr.length
+        const avgY = (arr: FaceBox[]) => arr.reduce((s, f) => s + f.centerY, 0) / arr.length
+        topX = clampX(Math.floor(avgX(sorted.slice(0, mid)) - cropW / 2))
+        topY = clampY(avgY(sorted.slice(0, mid)))
+        botX = clampX(Math.floor(avgX(sorted.slice(mid)) - cropW / 2))
+        botY = clampY(avgY(sorted.slice(mid)))
+        console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} clustered topX=${topX} topY=${topY} botX=${botX} botY=${botY}`)
       } else {
-        topX = centerX
-        botX = centerX
+        topX = botX = centerX
+        topY = botY = centerY
         console.log(`[context] seg ${seg.start.toFixed(2)}→${seg.end.toFixed(2)} insufficient faces — centering both panels`)
       }
     }
 
-    const filterComplex = buildContextFilter(dims, topX, botX)
+    const filterComplex = buildContextFilter(dims, topX, topY, botX, botY)
 
     execFileSync(ffmpeg, [
       '-loglevel', 'error',
